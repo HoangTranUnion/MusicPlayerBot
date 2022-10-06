@@ -104,7 +104,8 @@ class Player(commands.Cog):
         :param url_:
         :return:
         """
-
+        if not url_.strip():
+            return await ctx.send("No input has been given")
         guild_id = ctx.guild.id
 
         def check_valid_input(m):
