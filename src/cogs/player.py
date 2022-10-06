@@ -2,6 +2,7 @@ from discord.ext import commands, tasks
 import discord
 import asyncio
 import os
+from copy import deepcopy
 from src.player.youtube.verify_link import is_valid_link
 from src.player.youtube.search import SearchVideos
 from src.player.youtube.media_metadata import MediaMetadata
@@ -53,6 +54,15 @@ class Player(commands.Cog):
         self._previous_song: Dict[int, Union[MediaMetadata, None]] = defaultdict(lambda: None)
         self._players: Dict[int, discord.FFmpegPCMAudio] = {}
 
+    @staticmethod
+    def _delete_files(song_metadata: MediaMetadata):
+        fp = os.path.join(MUSIC_STORAGE, f"{song_metadata.id}.mp3")
+        try:
+            if os.path.isfile(fp) or os.path.islink(fp):
+                os.unlink(fp)
+        except Exception as e:
+            print('Failed to delete %s. Reason: %s' % (fp, e))
+
     def get_players(self, ctx, job=_NEW_PLAYER):
         guild_id = ctx.guild.id
         if guild_id in self._players and job:
@@ -70,6 +80,9 @@ class Player(commands.Cog):
         if member.bot and member.id == self._bot.user.id:
             if before.channel and not after.channel:
                 guild_id = member.guild.id
+                bogus_queue = deepcopy(self._queue[guild_id])
+                for item in bogus_queue:
+                    self._delete_files(item)
                 self._queue[guild_id].clear()
                 self._cur_song[guild_id] = None
                 try:
