@@ -2,16 +2,16 @@ from discord.ext import commands, tasks
 import discord
 import asyncio
 import os
-from MusicPlayerBot.src.player.youtube.verify_link import is_valid_link
-from MusicPlayerBot.src.player.youtube.search import SearchVideos
-from MusicPlayerBot.src.player.youtube.media_metadata import MediaMetadata
-from MusicPlayerBot.src.player.youtube.load_url import LoadURL
-from MusicPlayerBot.src.player.youtube.download_media import Downloader, NoVideoInQueueError, isExist, SingleDownloader
+from src.player.youtube.verify_link import is_valid_link
+from src.player.youtube.search import SearchVideos
+from src.player.youtube.media_metadata import MediaMetadata
+from src.player.youtube.load_url import LoadURL
+from src.player.youtube.download_media import Downloader, NoVideoInQueueError, isExist, SingleDownloader
 from typing import List, Dict, Union
 from datetime import timedelta
 from collections import defaultdict
 import random
-from MusicPlayerBot.constants import MUSIC_STORAGE, MAX_MSG_EMBED_SIZE
+from constants import MUSIC_STORAGE, MAX_MSG_EMBED_SIZE
 from yt_dlp import YoutubeDL
 import functools
 from timeit import default_timer

@@ -3,9 +3,9 @@ from typing import List
 import os
 import asyncio
 
-from MusicPlayerBot.constants import MUSIC_STORAGE
-from MusicPlayerBot.src.player.youtube.media_metadata import MediaMetadata
-from MusicPlayerBot.src.player.alter_title import alter_title
+from constants import MUSIC_STORAGE
+from src.player.youtube.media_metadata import MediaMetadata
+from src.player.alter_title import alter_title
 
 
 class NoVideoInQueueError(Exception):

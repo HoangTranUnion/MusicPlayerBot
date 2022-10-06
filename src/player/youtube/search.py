@@ -1,5 +1,5 @@
 from yt_dlp import YoutubeDL
-from MusicPlayerBot.src.player.youtube.media_metadata import MediaMetadata
+from src.player.youtube.media_metadata import MediaMetadata
 
 
 class SearchVideos:

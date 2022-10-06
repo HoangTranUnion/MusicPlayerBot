@@ -1,6 +1,6 @@
 from yt_dlp import YoutubeDL
 from typing import Dict
-from MusicPlayerBot.src.player.youtube.media_metadata import MediaMetadata
+from src.player.youtube.media_metadata import MediaMetadata
 
 
 class LoadURL:
