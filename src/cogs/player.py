@@ -142,7 +142,7 @@ class Player(commands.Cog):
             q_msg = await self._bot.wait_for('message', check=check_valid_input, timeout=30)
 
             if q_msg.content.isdigit() and 1 <= int(q_msg.content) <= 5:
-                data = [result[int(q_msg.content)]]
+                data = [result[int(q_msg.content) + 1]]
             else:
                 return await ctx.send("Illegal input. Terminated search session.")
         else:
