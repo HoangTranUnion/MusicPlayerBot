@@ -1,6 +1,6 @@
 import discord, asyncio
 from pathlib import Path
-from constants import BOT_PREFIX, TOKEN, REMINE_ID
+from constants import BOT_PREFIX, TOKEN, REMINE_ID, MUSIC_STORAGE
 from discord.ext.commands import Bot, is_owner
 
 intents = discord.Intents.default()
@@ -63,6 +63,12 @@ async def reload(ctx, extension):
 
 
 if __name__ =='__main__':
+    import glob, os, os.path
+
+    filelist = glob.glob(os.path.join(MUSIC_STORAGE, "*.mp3"))
+    for f in filelist:
+        os.remove(f)
+
     for extension in extensions:
         try:
             asyncio.run(bot.load_extension(extension))
