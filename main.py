@@ -7,6 +7,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = Bot(command_prefix=BOT_PREFIX, intents = intents)
+bot.remove_command('help')
 client = discord.Client(intents = intents)
 
 extensions = [f"src.cogs.{path.stem}" for path in Path('src/cogs').glob('*.py')]
