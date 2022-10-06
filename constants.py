@@ -7,9 +7,4 @@ REMINE_ID = 323666728716599308 # for reloading the bot
 ROOT_FOLDER = os.path.dirname(os.path.realpath(__file__))
 MUSIC_STORAGE = os.path.join(ROOT_FOLDER, "music_storage")
 
-try:
-    os.makedirs(MUSIC_STORAGE, mode=0o777)
-except FileExistsError:
-    pass
-
 MAX_MSG_EMBED_SIZE = 1024

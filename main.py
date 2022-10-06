@@ -69,6 +69,11 @@ if __name__ =='__main__':
     for f in filelist:
         os.remove(f)
 
+    try:
+        os.makedirs(MUSIC_STORAGE, mode=0o777)
+    except FileExistsError:
+        pass
+
     for extension in extensions:
         try:
             asyncio.run(bot.load_extension(extension))
