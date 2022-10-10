@@ -120,7 +120,11 @@ class RequestQueue(DownloaderObservers):
                     results_embed.set_footer(text="Timeout in 30s")
                     await ctx.send(embed=results_embed)
 
-                    q_msg = await client.wait_for('message', check=check_valid_input, timeout=30)
+                    try:
+                        q_msg = await client.wait_for('message', check=check_valid_input, timeout=30)
+                    except asyncio.TimeoutError:
+                        self.priority = None
+                        return await ctx.send(f"Timeout! Search session for query {url_} terminated.")
 
                     if q_msg.content.isdigit() and 1 <= int(q_msg.content) <= 5:
                         data = [result[int(q_msg.content) - 1]]
@@ -354,7 +358,7 @@ class Player(commands.Cog):
                 after=lambda e:
                 print('Player error: %s' % e) if e else repeat(ctx.guild, ctx.voice_client, player)
             )
-        else:
+        elif "skip" in inspect.stack()[1][3] or not vc.is_playing():
             if len(self._queue[guild_id]) >= 1:
                 try:
                     self._previous_song[guild_id] = self._cur_song[guild_id]
@@ -363,7 +367,11 @@ class Player(commands.Cog):
                         self._queue[guild_id].insert(0, self._cur_song[guild_id])
                         self._cur_song[guild_id] = self._previous_song[guild_id]
                         self._previous_song[guild_id] = None
-                        raise IOError("File not exist just yet")
+                        if "skip" in inspect.stack()[1][3]:
+                            raise IOError("File not exist just yet")
+                        else:
+                            asyncio.run_coroutine_threadsafe(asyncio.sleep(1))
+                            self.play_next(ctx)
                 except IndexError:
                     self._cur_song[guild_id] = None
                 if self._cur_song[guild_id] is None:
@@ -380,6 +388,9 @@ class Player(commands.Cog):
                 if not vc.is_playing():
                     asyncio.run_coroutine_threadsafe(vc.disconnect(), self._bot.loop)
                 asyncio.run_coroutine_threadsafe(ctx.send("Finished playing!"), ctx.bot.loop)
+        else:
+            asyncio.run_coroutine_threadsafe(asyncio.sleep(1))
+            self.play_next(ctx)
 
     @commands.command()
     @commands.is_owner()
