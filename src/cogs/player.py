@@ -120,7 +120,11 @@ class RequestQueue(DownloaderObservers):
                     results_embed.set_footer(text="Timeout in 30s")
                     await ctx.send(embed=results_embed)
 
-                    q_msg = await client.wait_for('message', check=check_valid_input, timeout=30)
+                    try:
+                        q_msg = await client.wait_for('message', check=check_valid_input, timeout=30)
+                    except asyncio.TimeoutError:
+                        self.priority = None
+                        return await ctx.send("Timeout! Search session terminated.")
 
                     if q_msg.content.isdigit() and 1 <= int(q_msg.content) <= 5:
                         data = [result[int(q_msg.content) - 1]]
