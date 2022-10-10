@@ -3,19 +3,22 @@ import discord
 import asyncio
 import os
 from copy import deepcopy
+from typing import Union
+from datetime import timedelta
+import random
+import inspect
+from yt_dlp import YoutubeDL
+import functools
+from timeit import default_timer
+from constants import MUSIC_STORAGE, MAX_MSG_EMBED_SIZE
 from src.player.youtube.verify_link import is_valid_link
 from src.player.youtube.search import SearchVideos
 from src.player.youtube.media_metadata import MediaMetadata
 from src.player.youtube.load_url import LoadURL
 from src.player.youtube.download_media import Downloader, NoVideoInQueueError, isExist, SingleDownloader
-from typing import List, Dict, Union
-from datetime import timedelta
-from collections import defaultdict
-import random
-from constants import MUSIC_STORAGE, MAX_MSG_EMBED_SIZE
-from yt_dlp import YoutubeDL
-import functools
-from timeit import default_timer
+from src.player.observers import *
+from src.data_transfer import *
+
 
 YOUTUBEDL_PARAMS = {
     'format': 'bestaudio/best',
@@ -31,6 +34,115 @@ YOUTUBEDL_PARAMS = {
 MAX_QUEUE_SIZE = 50  # not implemented - basically max queue size possible supported.
 
 
+async def run_blocker(client, func, *args, **kwargs):
+    func_ = functools.partial(func, *args, **kwargs)
+    return await client.loop.run_in_executor(None, func_)
+
+
+def _time_split(time: int):
+    return str(timedelta(seconds=time))
+
+
+class Job:
+    def __init__(self, job_name: str, work: str):
+        self.job = job_name  # accepts either "search" or "access"
+        self.work = work
+
+
+YT_DLP_SESH = YoutubeDL(YOUTUBEDL_PARAMS)
+
+
+class RequestQueue(DownloaderObservers):
+    def __init__(self, observer = DownloaderObservable()):
+        super().__init__(observer)
+        self.priority: Union[Job, None] = None
+        self.on_hold: List[Job] = []
+        self._completed_priority = False
+        self._ongoing_process = False
+    
+    def add_new_request(self, job: Job):
+        if self.priority is None and not self.on_hold:
+            self.priority = job
+        elif self.priority is None:
+            self.priority = self.on_hold.pop(0)
+            self.on_hold.append(job)
+        else:
+            self.on_hold.append(job)
+
+    def notify(self):
+        if inspect.stack()[1][3] == "notify_observers":
+            self._completed_priority = True
+
+    async def process_requests(self, client, ctx: commands.Context, vault: Vault, selector_choice):
+        """
+        Projected solution:
+            - If self.priority is not None, proceed to download the file(s) in the playlist given in self.priority
+            - Other than that, pop one from on_hold and let the process continues
+            - If priority is None, and the on_hold list is empty, nothing needs to be done at all. We done!
+
+            - If the download process is completed for one list, continue with the next one.
+        """
+        def check_valid_input(m):
+            return m.author == ctx.author and m.channel == ctx.channel
+
+        if self.priority is not None and self._ongoing_process:
+            while not self._completed_priority:
+                await asyncio.sleep(1)
+            self._completed_priority = False
+            self._ongoing_process = False
+            await self.process_requests(client, ctx, vault, selector_choice)
+        elif self.priority is not None and not self._completed_priority:
+            self._ongoing_process = True
+            guild_id = ctx.guild.id
+            new_sender = Sender(guild_id, vault)
+
+            url_ = self.priority.work
+            if self.priority.job == "search":
+                if selector_choice:
+                    sv_obj = SearchVideos()
+                    sv_obj.subscribe(self)
+                    result: List[MediaMetadata] = await run_blocker(client, sv_obj.search, url_)
+                    results_embed = discord.Embed(
+                        color=discord.Color.blue()
+                    )
+                    r_link = ""
+                    for res_ind, res in enumerate(result):
+                        if res_ind != len(result) - 1:
+                            r_link += f"**{res_ind + 1}. [{res.title}]({res.original_url})** ({_time_split(res.duration)})\n"
+                        else:
+                            r_link += f"**{res_ind + 1}. [{res.title}]({res.original_url})** ({_time_split(res.duration)})\n"
+
+                    results_embed.add_field(
+                        name="Select a video.",
+                        value=r_link,
+                        inline=False
+                    )
+                    results_embed.set_footer(text="Timeout in 30s")
+                    await ctx.send(embed=results_embed)
+
+                    q_msg = await client.wait_for('message', check=check_valid_input, timeout=30)
+
+                    if q_msg.content.isdigit() and 1 <= int(q_msg.content) <= 5:
+                        data = [result[int(q_msg.content) - 1]]
+                    else:
+                        self.priority = None  # reset. This session no longer exists
+                        return await ctx.send("Illegal input. Terminated search session.")
+                else:
+                    sv_obj = SearchVideos(limit=1)
+                    sv_obj.subscribe(self)
+                    data: List[MediaMetadata] = await run_blocker(client, sv_obj.search, url_)
+            else:
+                load_sesh = LoadURL(url_)
+                load_sesh.subscribe(self)
+                data = await run_blocker(client, load_sesh.load_info)
+
+            new_sender.send(data)
+            self.priority = None
+        elif self.priority is None and self.on_hold:
+            self.priority = self.on_hold.pop(0)
+            await self.process_requests(client, ctx, vault, selector_choice)
+    
+
 class Player(commands.Cog):
     _NO_LOOP = 0
     _LOOP = 1
@@ -45,14 +157,21 @@ class Player(commands.Cog):
         'options': '-vn',
     }
 
+    _ACCESS_JOB = "access"
+    _SEARCH_JOB = "search"
+
     def __init__(self, bot):
         self._bot = bot
         self._queue: Dict[int, List[MediaMetadata]] = defaultdict(list)
+        self._request_queue: Dict[int, RequestQueue] = defaultdict(lambda: RequestQueue())
         self._loop: Dict[int] = defaultdict(lambda: self._NO_LOOP)
         self._select_video: Dict[int] = defaultdict(lambda: self._SELECT_VIDEO)
         self._cur_song: Dict[int, Union[MediaMetadata, None]] = defaultdict(lambda: None)
         self._previous_song: Dict[int, Union[MediaMetadata, None]] = defaultdict(lambda: None)
         self._players: Dict[int, discord.FFmpegPCMAudio] = {}
+        self._vault = Vault()
+        self._cur_processing: Dict[int, bool] = defaultdict(lambda: False)
+        self._pre_play_processing: Dict[int, bool] = defaultdict(lambda: False)
 
     @staticmethod
     def _delete_files(song_metadata: MediaMetadata):
@@ -94,7 +213,6 @@ class Player(commands.Cog):
                 print(f"cleared in guild id {guild_id}")
 
     @commands.command()
-    @commands.cooldown(1, 10, commands.BucketType.guild)
     async def play(self, ctx, *, url_: str):
         """
         Allows the bot to play audio in the voice channel.
@@ -104,56 +222,36 @@ class Player(commands.Cog):
         :param url_:
         :return:
         """
+
         if not url_.strip():
             return await ctx.send("No input has been given")
         guild_id = ctx.guild.id
 
-        def check_valid_input(m):
-            return m.author == ctx.author and m.channel == ctx.channel
-
-        async def run_blocker(client, func, *args, **kwargs):
-            func_ = functools.partial(func, *args, **kwargs)
-            return await client.loop.run_in_executor(None, func_)
-
         if is_valid_link(url_):
-            load_sesh = LoadURL(url_)
-            data = await run_blocker(self._bot, load_sesh.load_info)
-        elif self._select_video[guild_id]:
-            sv_obj = SearchVideos()
-            result: List[MediaMetadata] = await run_blocker(self._bot, sv_obj.search, url_)
-            results_embed = discord.Embed(
-                color=discord.Color.blue()
-            )
-            r_link = ""
-            for res_ind, res in enumerate(result):
-                if res_ind != len(result) - 1:
-                    r_link += f"**{res_ind + 1}. [{res.title}]({res.original_url})** ({self._time_split(res.duration)})\n"
-                else:
-                    r_link += f"**{res_ind + 1}. [{res.title}]({res.original_url})** ({self._time_split(res.duration)})\n"
-
-            results_embed.add_field(
-                name="Select a video.",
-                value=r_link,
-                inline=False
-            )
-            results_embed.set_footer(text="Timeout in 30s")
-            await ctx.send(embed=results_embed)
-
-            q_msg = await self._bot.wait_for('message', check=check_valid_input, timeout=30)
-
-            if q_msg.content.isdigit() and 1 <= int(q_msg.content) <= 5:
-                data = [result[int(q_msg.content) + 1]]
-            else:
-                return await ctx.send("Illegal input. Terminated search session.")
+            cmd_job = self._ACCESS_JOB
         else:
-            sv_obj = SearchVideos(limit=1)
-            data: List[MediaMetadata] = await run_blocker(self._bot, sv_obj.search, url_)
+            cmd_job = self._SEARCH_JOB
+        self._request_queue[guild_id].add_new_request(Job(cmd_job, url_))
+        if not self._cur_processing[guild_id]:
+            self._cur_processing[guild_id] = True
+            self._bot.loop.create_task(self.bg_process_rq(ctx))
+
+        while self._vault.isEmpty(guild_id):
+            await asyncio.sleep(1)
+
+        # both runs at the same time from here.
+        data = self._vault.get_data(guild_id)
+
         if data is not None:
             data_l = len(data)
             if data_l == 1:
                 msg = f"Added {data[0].title} to the queue."
             else:
                 msg = f"Added {data_l} songs to the queue."
+
+            self._queue[guild_id].extend(data)
+            await ctx.send(msg)
+
             try:
                 voiceChannel = discord.utils.get(
                     ctx.message.guild.voice_channels,
@@ -162,44 +260,48 @@ class Player(commands.Cog):
             except AttributeError:
                 return await ctx.send('You need to be in a voice channel to use this command')
 
-            self._queue[guild_id].extend(data)
-            await ctx.send(msg)
-            with YoutubeDL(YOUTUBEDL_PARAMS) as ydl:
-                try:
-                    obj = Downloader(data, ydl)
-                    await run_blocker(self._bot, obj.first_download)
-                except NoVideoInQueueError:
-                    return await ctx.send("No items are currently in queue")
+            await self.pre_play_process(ctx, data,voiceChannel)
 
-            if data_l > 1:
-                self._bg_download_check.start(ctx)
+    async def pre_play_process(self, ctx, data, voiceChannel):
+        guild_id = ctx.guild.id
+        if self._pre_play_processing[guild_id]:
+            await asyncio.sleep(1)
+            await self.pre_play_process(ctx, data, voiceChannel)
+        else:
+            try:
+                obj = Downloader(data, YT_DLP_SESH)
+                await run_blocker(self._bot, obj.first_download)
+            except NoVideoInQueueError:
+                return await ctx.send("No items are currently in queue")
+
+            if len(data) > 1:
+                self.bg_download_check.start(ctx)
 
             if not self._is_connected(ctx):
                 await self.peek_vc(ctx)
                 await voiceChannel.connect()
-                # await ctx.send(data)
 
             voice = ctx.voice_client
+            self._pre_play_processing[guild_id] = False
             await self.play_song(ctx, voice)
 
-    @play.error
-    async def play_error(self, ctx, error):
-        if isinstance(error, commands.CommandOnCooldown):
-            await ctx.send("Slow down a bit, I am processing the previous request.")
+    async def bg_process_rq(self, ctx):
+        guild_id = ctx.guild.id
+        while True:
+            if self._request_queue[guild_id].on_hold or self._request_queue[guild_id].priority is not None:
+                await self._request_queue[guild_id].process_requests(self._bot, ctx, self._vault, self._select_video[guild_id])
+            else:
+                self._cur_processing[guild_id] = False
+                break
 
-    @tasks.loop(minutes=1)
-    async def _bg_download_check(self, ctx):
-        async def run_blocker(client, func, *args, **kwargs):
-            func_ = functools.partial(func, *args, **kwargs)
-            return await client.loop.run_in_executor(None, func_)
-
+    @tasks.loop(seconds = 20)
+    async def bg_download_check(self, ctx):
         guild_id = ctx.guild.id
 
         for item in self._queue[guild_id]:
             if not isExist(item):
-                with YoutubeDL(YOUTUBEDL_PARAMS) as ydl_sesh:
-                    down_sesh = SingleDownloader(item, ydl_sesh)
-                    await run_blocker(self._bot, down_sesh.download)
+                down_sesh = SingleDownloader(item, YT_DLP_SESH)
+                await run_blocker(self._bot, down_sesh.download)
 
     async def play_song(self, ctx, voice):
         guild_id = ctx.guild.id
@@ -209,7 +311,7 @@ class Player(commands.Cog):
             voice_.is_playing()
 
         if self._loop[guild_id]:
-            player = self.get_players(ctx, job = self._REFRESH_PLAYER)
+            player = self.get_players(ctx, job=self._REFRESH_PLAYER)
             ctx.voice_client.play(
                 player,
                 after=lambda e:
@@ -278,10 +380,6 @@ class Player(commands.Cog):
                 if not vc.is_playing():
                     asyncio.run_coroutine_threadsafe(vc.disconnect(), self._bot.loop)
                 asyncio.run_coroutine_threadsafe(ctx.send("Finished playing!"), ctx.bot.loop)
-
-    @staticmethod
-    def _time_split(time: int):
-        return str(timedelta(seconds=time))
 
     @commands.command()
     @commands.is_owner()
@@ -358,7 +456,7 @@ class Player(commands.Cog):
 
             cur_playing_embed.add_field(
                 name="Currently playing",
-                value=f"**[{self._cur_song[guild_id].title}]({self._cur_song[guild_id].original_url})** ({self._time_split(self._cur_song[guild_id].duration)})\n"
+                value=f"**[{self._cur_song[guild_id].title}]({self._cur_song[guild_id].original_url})** ({_time_split(self._cur_song[guild_id].duration)})\n"
             )
 
             await ctx.send(embed=cur_playing_embed)
@@ -377,7 +475,7 @@ class Player(commands.Cog):
                     while not max_reached and cur_index < len(self._queue[guild_id]):
                         res_ind = cur_index
                         res = self._queue[guild_id][res_ind]
-                        string = f"**{res_ind + 1}. [{res.title}]({res.original_url})** ({self._time_split(res.duration)})\n"
+                        string = f"**{res_ind + 1}. [{res.title}]({res.original_url})** ({_time_split(res.duration)})\n"
                         if len(r_link) <= MAX_MSG_EMBED_SIZE - len(string):
                             r_link += string
                             cur_index += 1
