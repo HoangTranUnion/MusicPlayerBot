@@ -13,7 +13,7 @@ class Core(commands.Cog):
                               color = discord.Color.blue())
         embed.add_field(
             name = ">3play <url/query>",
-            value = "Play the audio from the given url, or play a song chosen/auto-picked from the query. CD: One command every 10s",
+            value = "Play the audio from the given url, or play a song chosen/auto-picked from the query.",
             inline = False
         )
 

@@ -213,7 +213,6 @@ class Player(commands.Cog):
                 print(f"cleared in guild id {guild_id}")
 
     @commands.command()
-    @commands.cooldown(2, 10, commands.BucketType.guild)
     async def play(self, ctx, *, url_: str):
         """
         Allows the bot to play audio in the voice channel.
@@ -262,11 +261,6 @@ class Player(commands.Cog):
                 return await ctx.send('You need to be in a voice channel to use this command')
 
             await self.pre_play_process(ctx, data,voiceChannel)
-
-    @play.error
-    async def play_error(self, ctx, error):
-        if isinstance(error, commands.CommandOnCooldown):
-            await ctx.send("Slow down a bit, I am processing the previous request.")
 
     async def pre_play_process(self, ctx, data, voiceChannel):
         guild_id = ctx.guild.id
