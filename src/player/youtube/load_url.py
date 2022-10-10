@@ -1,10 +1,12 @@
 from yt_dlp import YoutubeDL
 from typing import Dict
 from src.player.youtube.media_metadata import MediaMetadata
+from src.player.observers import DownloaderObservable
 
 
-class LoadURL:
+class LoadURL(DownloaderObservable):
     def __init__(self, url):
+        super().__init__()
         self._url = url
         if "list" in self._url:
             self._url_type = "playlist"
@@ -17,11 +19,9 @@ class LoadURL:
             }
         )
 
-        self.load_sesh_completed = False
-
     def load_info(self):
         obtained_data : Dict = self.inst.extract_info(self._url, download = False)
-        self.load_sesh_completed = True
+        self.notify_observers() # im done mtfk
         if self._url_type == 'video':
             if obtained_data is not None:
                 return [MediaMetadata(obtained_data)]

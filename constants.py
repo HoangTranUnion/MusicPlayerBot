@@ -1,7 +1,7 @@
 import os
 
-BOT_PREFIX = ">3"
-TOKEN = "MTAyNjA3MzI2NDU3NDk2MzcyMg.GOVJ2B.cB3dlrR1TxqtSab_Gle2y-bYzU_JsqccEEiZFs"
+BOT_PREFIX = ">>"
+TOKEN = "MTAyODE5NDM1ODk4MzQwOTc0NQ.GL8AiC.bzyF61bl2S-NJMxlAPRK7dG9cvZKVFQB0cvaIk"
 REMINE_ID = 323666728716599308 # for reloading the bot
 
 ROOT_FOLDER = os.path.dirname(os.path.realpath(__file__))
