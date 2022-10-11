@@ -10,7 +10,7 @@ import inspect
 from yt_dlp import YoutubeDL
 import functools
 from timeit import default_timer
-from constants import MUSIC_STORAGE, MAX_MSG_EMBED_SIZE
+from constants import MUSIC_STORAGE, MAX_MSG_EMBED_SIZE, CONFIG_FILE_LOC
 from src.player.youtube.verify_link import is_valid_link
 from src.player.youtube.search import SearchVideos
 from src.player.youtube.media_metadata import MediaMetadata
@@ -18,6 +18,7 @@ from src.player.youtube.load_url import LoadURL
 from src.player.youtube.download_media import Downloader, NoVideoInQueueError, isExist, SingleDownloader
 from src.player.observers import *
 from src.data_transfer import *
+from src.configs import Config
 
 
 YOUTUBEDL_PARAMS = {
@@ -98,7 +99,7 @@ class RequestQueue(DownloaderObservers):
 
             url_ = self.priority.work
             if self.priority.job == "search":
-                if selector_choice:
+                if not selector_choice:
                     sv_obj = SearchVideos()
                     sv_obj.subscribe(self)
                     result: List[MediaMetadata] = await run_blocker(client, sv_obj.search, url_)
@@ -151,8 +152,8 @@ class Player(commands.Cog):
     _NO_LOOP = 0
     _LOOP = 1
 
-    _AUTO_PICK_FIRST_VIDEO = 0
-    _SELECT_VIDEO = 1
+    # _AUTO_PICK_FIRST_VIDEO = 0
+    # _SELECT_VIDEO = 1
 
     _NEW_PLAYER = 1
     _REFRESH_PLAYER = 0
@@ -169,13 +170,14 @@ class Player(commands.Cog):
         self._queue: Dict[int, List[MediaMetadata]] = defaultdict(list)
         self._request_queue: Dict[int, RequestQueue] = defaultdict(lambda: RequestQueue())
         self._loop: Dict[int] = defaultdict(lambda: self._NO_LOOP)
-        self._select_video: Dict[int] = defaultdict(lambda: self._SELECT_VIDEO)
+        # self._select_video: Dict[int] = defaultdict(lambda: self._SELECT_VIDEO)
         self._cur_song: Dict[int, Union[MediaMetadata, None]] = defaultdict(lambda: None)
         self._previous_song: Dict[int, Union[MediaMetadata, None]] = defaultdict(lambda: None)
         self._players: Dict[int, discord.FFmpegPCMAudio] = {}
         self._vault = Vault()
         self._cur_processing: Dict[int, bool] = defaultdict(lambda: False)
         self._pre_play_processing: Dict[int, bool] = defaultdict(lambda: False)
+        self._bot_config = Config(CONFIG_FILE_LOC)
 
     @staticmethod
     def _delete_files(song_metadata: MediaMetadata):
@@ -221,11 +223,12 @@ class Player(commands.Cog):
         """
         Allows the bot to play audio in the voice channel.
         Subsequent calls from users in the same channel will add more media entries to the queue.
-        At the moment, the bot only supports YouTube and Bilibili links.
+        At the moment, the bot only supports YouTube links.
         :param ctx:
         :param url_:
         :return:
         """
+        await self.peek_vc(ctx)
 
         if not url_.strip():
             return await ctx.send("No input has been given")
@@ -267,6 +270,15 @@ class Player(commands.Cog):
             await self.pre_play_process(ctx, data,voiceChannel)
 
     async def pre_play_process(self, ctx, data, voiceChannel):
+        """
+        Processes the data before playing the songs in the voice channel.
+
+        Args:
+            ctx (commands.Context): Context of the command
+            data (List[MediaMetadata]): The data to be processed
+            voiceChannel (_type_): The voice channel to connect to
+
+        """
         guild_id = ctx.guild.id
         if self._pre_play_processing[guild_id]:
             await asyncio.sleep(1)
@@ -290,10 +302,15 @@ class Player(commands.Cog):
             await self.play_song(ctx, voice)
 
     async def bg_process_rq(self, ctx):
+        """ Processes the requests in the background
+
+        Args:
+            ctx (commands.Context): Context of the command
+        """
         guild_id = ctx.guild.id
         while True:
             if self._request_queue[guild_id].on_hold or self._request_queue[guild_id].priority is not None:
-                await self._request_queue[guild_id].process_requests(self._bot, ctx, self._vault, self._select_video[guild_id])
+                await self._request_queue[guild_id].process_requests(self._bot, ctx, self._vault, self._bot_config.isAutoPick(guild_id))
             else:
                 self._cur_processing[guild_id] = False
                 break
