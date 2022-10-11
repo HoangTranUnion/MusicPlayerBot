@@ -299,7 +299,10 @@ class Player(commands.Cog):
 
             voice = ctx.voice_client
             self._pre_play_processing[guild_id] = False
-            await self.play_song(ctx, voice)
+            try:
+                await self.play_song(ctx, voice)
+            except discord.errors.ClientException:
+                pass
 
     async def bg_process_rq(self, ctx):
         """ Processes the requests in the background
