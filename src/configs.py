@@ -38,7 +38,7 @@ class Config:
         config = configparser.ConfigParser()
         config.read(self._config_file)
         config.add_section(str(id_))
-        config.set(str(id_), 'AutoSelectSong', True)
+        config.set(str(id_), 'AutoSelectSong', "True")
         with open(self._config_file, 'w') as cf:
             config.write(cf)
 
