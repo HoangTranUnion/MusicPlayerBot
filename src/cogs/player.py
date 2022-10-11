@@ -556,11 +556,10 @@ class Player(commands.Cog):
         Requires admin privilege in the server or the bot would just be abused back and forth.
         """
         guild_id = ctx.guild.id
-        if self._select_video[guild_id]:
-            self._select_video[guild_id] = self._AUTO_PICK_FIRST_VIDEO
+        self._bot_config.set_state(guild_id)
+        if self._bot_config.isAutoPick(guild_id):
             await ctx.send("Changed to auto select the first one on search.")
         else:
-            self._select_video[guild_id] = self._SELECT_VIDEO
             await ctx.send("Changed to manually select video from search.")
 
     @set_state.error

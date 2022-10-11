@@ -47,3 +47,15 @@ class Config:
             self._write_to_config(id_)
             self._data = self._read_config()
         return self._data[str(id_)].getboolean('AutoSelectSong')
+
+    def set_state(self, id_:int):
+        if str(id_) not in self._data:
+            self._write_to_config(id_)
+            self._data = self._read_config()
+        if self.isAutoPick(id_):
+            self._data[str(id_)]['AutoSelectSong'] = "False"
+        else:
+            self._data[str(id_)]['AutoSelectSong'] = "True"
+        
+        with open(self._config_file, 'w') as cf:
+            self._data.write(cf)
