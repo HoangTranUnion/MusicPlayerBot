@@ -537,7 +537,7 @@ class Player(commands.Cog):
         guild_id = ctx.guild.id
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
-            return await ctx.send("You need to be in a voice channel to use this command.")v
+            return await ctx.send("You need to be in a voice channel to use this command.")
 
         self._queue[guild_id].clear()
         await ctx.send("Queue cleared!")
