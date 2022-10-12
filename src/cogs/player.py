@@ -228,7 +228,9 @@ class Player(commands.Cog):
         :param url_:
         :return:
         """
-        await self.peek_vc(ctx)
+        can_join_vc = self.peek_vc(ctx)
+        if not can_join_vc:
+            return await ctx.send("You need to be in a voice channel to use this command.")
 
         if not url_.strip():
             return await ctx.send("No input has been given")
@@ -422,7 +424,9 @@ class Player(commands.Cog):
     async def stop_(self, ctx):
         """Stops and disconnects the bot from voice"""
         guild_id = ctx.guild.id
-        await self.peek_vc(ctx)
+        can_join_vc = self.peek_vc(ctx)
+        if not can_join_vc:
+            return await ctx.send("You need to be in a voice channel to use this command.")
 
         if self._is_connected(ctx):
             await ctx.voice_client.disconnect()
@@ -435,7 +439,9 @@ class Player(commands.Cog):
         """
         Skips to next song in queue
         """
-        await self.peek_vc(ctx)
+        can_join_vc = self.peek_vc(ctx)
+        if not can_join_vc:
+            return await ctx.send("You need to be in a voice channel to use this command.")
 
         if self._is_connected(ctx):
             ctx.voice_client.pause()
@@ -449,7 +455,9 @@ class Player(commands.Cog):
 
     @commands.command(name="pause")
     async def pause(self, ctx):
-        await self.peek_vc(ctx)
+        can_join_vc = self.peek_vc(ctx)
+        if not can_join_vc:
+            return await ctx.send("You need to be in a voice channel to use this command.")
 
         if self._is_connected(ctx):
             ctx.voice_client.pause()
@@ -459,7 +467,9 @@ class Player(commands.Cog):
 
     @commands.command(name='resume')
     async def resume(self, ctx):
-        await self.peek_vc(ctx)
+        can_join_vc = self.peek_vc(ctx)
+        if not can_join_vc:
+            return await ctx.send("You need to be in a voice channel to use this command.")
 
         if self._is_connected(ctx):
             ctx.voice_client.resume()
@@ -469,7 +479,9 @@ class Player(commands.Cog):
 
     @commands.command(name="queue", aliases=["q", "playlist"])
     async def queue_(self, ctx):
-        await self.peek_vc(ctx)
+        can_join_vc = self.peek_vc(ctx)
+        if not can_join_vc:
+            return await ctx.send("You need to be in a voice channel to use this command.")
 
         guild_id = ctx.guild.id
 
@@ -523,14 +535,18 @@ class Player(commands.Cog):
     @commands.command(name='clear')
     async def clear_(self, ctx):
         guild_id = ctx.guild.id
-        await self.peek_vc(ctx)
+        can_join_vc = self.peek_vc(ctx)
+        if not can_join_vc:
+            return await ctx.send("You need to be in a voice channel to use this command.")v
 
         self._queue[guild_id].clear()
         await ctx.send("Queue cleared!")
 
     @commands.command(name='loop')
     async def loop(self, ctx):
-        await self.peek_vc(ctx)
+        can_join_vc = self.peek_vc(ctx)
+        if not can_join_vc:
+            return await ctx.send("You need to be in a voice channel to use this command.")
         guild_id = ctx.guild.id
 
         if self._loop[guild_id]:
@@ -542,7 +558,9 @@ class Player(commands.Cog):
 
     @commands.command(name='shuffle')
     async def shuffle(self, ctx):
-        await self.peek_vc(ctx)
+        can_join_vc = self.peek_vc(ctx)
+        if not can_join_vc:
+            return await ctx.send("You need to be in a voice channel to use this command.")
 
         guild_id = ctx.guild.id
         if self._queue[guild_id]:
@@ -572,7 +590,7 @@ class Player(commands.Cog):
             await ctx.send(msg)
 
     @staticmethod
-    async def peek_vc(ctx):
+    def peek_vc(ctx):
         """
         Checks to see if the author is in any vc or not.
         """
@@ -580,7 +598,9 @@ class Player(commands.Cog):
 
         if voice_state is None:
             # Exiting if the user is not in a voice channel
-            return await ctx.send('You need to be in a voice channel to use this command')
+            return False
+
+        return True
 
     @staticmethod
     async def idle_wait(ctx, ori_time):
