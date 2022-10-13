@@ -298,7 +298,6 @@ class Player(commands.Cog):
                 self.bg_download_check.start(ctx)
 
             if not self._is_connected(ctx):
-                await self.peek_vc(ctx)
                 await voiceChannel.connect()
 
             voice = ctx.voice_client
