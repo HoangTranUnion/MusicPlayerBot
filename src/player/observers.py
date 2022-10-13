@@ -5,14 +5,17 @@ class DownloaderObservable:
     def subscribe(self, observer):
         self._observers.append(observer)
 
+    def unsubscribe(self, observer):
+        self._observers.remove(observer)
+
     def notify_observers(self):
         for obs in self._observers:
-            obs.notify()
+            obs.update()
 
 
 class DownloaderObservers:
     def __init__(self, observable: DownloaderObservable):
         observable.subscribe(self)
 
-    def notify(self):
+    def update(self):
         ...

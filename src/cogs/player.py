@@ -70,7 +70,7 @@ class RequestQueue(DownloaderObservers):
         else:
             self.on_hold.append(job)
 
-    def notify(self):
+    def update(self):
         if inspect.stack()[1][3] == "notify_observers":
             self._completed_priority = True
 
@@ -126,7 +126,7 @@ class RequestQueue(DownloaderObservers):
                     except asyncio.TimeoutError:
                         self.priority = None
                         return await ctx.send(f"Timeout! Search session for query {url_} terminated.")
-
+                    sv_obj.unsubscribe(self)
                     if q_msg.content.isdigit() and 1 <= int(q_msg.content) <= 5:
                         data = [result[int(q_msg.content) - 1]]
                     else:
@@ -136,10 +136,12 @@ class RequestQueue(DownloaderObservers):
                     sv_obj = SearchVideos(limit=1)
                     sv_obj.subscribe(self)
                     data: List[MediaMetadata] = await run_blocker(client, sv_obj.search, url_)
+                    sv_obj.unsubscribe(self) # avoid the bot to store far too many unnecessary observants.
             else:
                 load_sesh = LoadURL(url_)
                 load_sesh.subscribe(self)
                 data = await run_blocker(client, load_sesh.load_info)
+                load_sesh.unsubscribe(self)
 
             new_sender.send(data)
             self.priority = None
