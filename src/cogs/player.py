@@ -167,6 +167,8 @@ class Player(commands.Cog):
     _ACCESS_JOB = "access"
     _SEARCH_JOB = "search"
 
+    _MAX_RETRY_COUNT = 3
+
     def __init__(self, bot):
         self._bot = bot
         self._queue: Dict[int, List[MediaMetadata]] = defaultdict(list)
@@ -180,6 +182,7 @@ class Player(commands.Cog):
         self._cur_processing: Dict[int, bool] = defaultdict(lambda: False)
         self._pre_play_processing: Dict[int, bool] = defaultdict(lambda: False)
         self._bot_config = Config(CONFIG_FILE_LOC)
+        self._retry_count: Dict[int, int] = defaultdict(lambda: 0)
 
     @staticmethod
     def _delete_files(song_metadata: MediaMetadata):
@@ -330,7 +333,7 @@ class Player(commands.Cog):
                 down_sesh = SingleDownloader(item, YT_DLP_SESH)
                 await run_blocker(self._bot, down_sesh.download)
 
-    async def play_song(self, ctx, voice):
+    async def play_song(self, ctx, voice, refresh = False):
         guild_id = ctx.guild.id
 
         def repeat(guild, voice_, audio):
@@ -355,15 +358,25 @@ class Player(commands.Cog):
                         await voice.disconnect()
                         return
 
-                    player = self.get_players(ctx)
+                    player = self.get_players(ctx, self._REFRESH_PLAYER) if refresh else self.get_players(ctx)
                     voice.play(
                         player,
                         after=lambda e:
-                        print('Player error: %s' % e) if e else self.play_next(ctx)
+                        self.retry_play(ctx, voice, e) if e else self.play_next(ctx)
                     )
                 await ctx.send('**Now playing:** {}'.format(self._cur_song[guild_id].title), delete_after=20)
             else:
                 await asyncio.sleep(1)
+    
+    def retry_play(self, ctx, voice, e):
+        g_id = ctx.guild.id
+        if self._retry_count[g_id] < self._MAX_RETRY_COUNT:
+            self._retry_count[g_id] += 1
+            self._queue[g_id].insert(0, self._cur_song[g_id])
+            self._cur_song[g_id] = None
+            asyncio.run_coroutine_threadsafe(self.play_song(ctx, voice, True))
+        else:
+            print("Player error: %s", e)
 
     def play_next(self, ctx):
         guild_id = ctx.guild.id
