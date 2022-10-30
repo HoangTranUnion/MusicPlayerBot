@@ -374,7 +374,7 @@ class Player(commands.Cog):
             self._retry_count[g_id] += 1
             self._queue[g_id].insert(0, self._cur_song[g_id])
             self._cur_song[g_id] = None
-            asyncio.run_coroutine_threadsafe(self.play_song(ctx, voice, True))
+            asyncio.run_coroutine_threadsafe(self.play_song(ctx, voice, True), ctx.bot.loop)
         else:
             print("Player error: %s", e)
 
