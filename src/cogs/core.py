@@ -48,8 +48,8 @@ class Core(commands.Cog):
         )
 
         embed.add_field(
-            name = ">3loop",
-            value = "Loops the curent media.",
+            name = ">3loop <optional: number of times to loop>",
+            value = "Loops the curent media. If a number of times is specified, the song will be looped for that number of times.",
             inline = False
         )
 
