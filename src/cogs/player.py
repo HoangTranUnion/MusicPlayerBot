@@ -336,16 +336,12 @@ class Player(commands.Cog):
     async def play_song(self, ctx, voice, refresh = False):
         guild_id = ctx.guild.id
 
-        def repeat(guild, voice_, audio):
-            voice_.play(audio, after=lambda e: repeat(guild, voice, audio))
-            voice_.is_playing()
-
         if self._loop[guild_id]:
             player = self.get_players(ctx, job=self._REFRESH_PLAYER)
             ctx.voice_client.play(
                 player,
                 after=lambda e:
-                print('Player error: %s' % e) if e else repeat(ctx.guild, ctx.voice_client, player)
+                print('Player error: %s' % e) if e else self.play_next(ctx)
             )
         else:
             if not voice.is_playing():
@@ -381,10 +377,6 @@ class Player(commands.Cog):
     def play_next(self, ctx):
         guild_id = ctx.guild.id
 
-        def repeat(guild, voice, audio):
-            voice.play(audio, after=lambda e: repeat(guild, voice, audio))
-            voice.is_playing()
-
         vc = discord.utils.get(self._bot.voice_clients, guild=ctx.guild)
 
         if self._loop[guild_id]:
@@ -392,7 +384,7 @@ class Player(commands.Cog):
             ctx.voice_client.play(
                 player,
                 after=lambda e:
-                print('Player error: %s' % e) if e else repeat(ctx.guild, ctx.voice_client, player)
+                print('Player error: %s' % e) if e else self.play_next(ctx)
             )
         else:
             if len(self._queue[guild_id]) >= 1:
