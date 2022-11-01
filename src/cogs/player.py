@@ -10,7 +10,7 @@ import inspect
 from yt_dlp import YoutubeDL
 import functools
 from timeit import default_timer
-from constants import MUSIC_STORAGE, MAX_MSG_EMBED_SIZE, CONFIG_FILE_LOC
+from constants import MUSIC_STORAGE, MAX_MSG_EMBED_SIZE, CONFIG_FILE_LOC, BOT_PREFIX
 from src.player.youtube.verify_link import is_valid_link
 from src.player.youtube.search import SearchVideos
 from src.player.youtube.media_metadata import MediaMetadata
@@ -46,6 +46,13 @@ def _time_split(time: int):
 
 class Job:
     def __init__(self, job_name: str, work: str):
+        """
+        Defines a job for the bot to do.
+
+        Args:
+            job_name (str): The name of the job. Accepts either 'search' or 'access'.
+            work (str): The workload required for the job.
+        """
         self.job = job_name  # accepts either "search" or "access"
         self.work = work
 
@@ -173,8 +180,11 @@ class Player(commands.Cog):
         self._bot = bot
         self._queue: Dict[int, List[MediaMetadata]] = defaultdict(list)
         self._request_queue: Dict[int, RequestQueue] = defaultdict(lambda: RequestQueue())
-        self._loop: Dict[int] = defaultdict(lambda: self._NO_LOOP)
-        # self._select_video: Dict[int] = defaultdict(lambda: self._SELECT_VIDEO)
+        self._loop: Dict[int, int] = defaultdict(lambda: self._NO_LOOP)
+        
+        self._loop_count: Dict[int, Union[Dict[MediaMetadata, int], None]] = defaultdict(lambda: None)
+        self._loop_counter: Dict[int, int] = defaultdict(lambda: 0)
+
         self._cur_song: Dict[int, Union[MediaMetadata, None]] = defaultdict(lambda: None)
         self._previous_song: Dict[int, Union[MediaMetadata, None]] = defaultdict(lambda: None)
         self._players: Dict[int, discord.FFmpegPCMAudio] = {}
@@ -336,33 +346,25 @@ class Player(commands.Cog):
     async def play_song(self, ctx, voice, refresh = False):
         guild_id = ctx.guild.id
 
-        if self._loop[guild_id]:
-            player = self.get_players(ctx, job=self._REFRESH_PLAYER)
-            ctx.voice_client.play(
+        if not voice.is_playing():
+            async with ctx.typing():
+                try:
+                    self._cur_song[guild_id] = self._queue[guild_id].pop(0)
+                except IndexError:
+                    self._cur_song[guild_id] = None
+            if self._cur_song[guild_id] is None:
+                await voice.disconnect()
+                return
+
+            player = self.get_players(ctx, self._REFRESH_PLAYER) if refresh else self.get_players(ctx)
+            voice.play(
                 player,
                 after=lambda e:
-                print('Player error: %s' % e) if e else self.play_next(ctx)
-            )
-        else:
-            if not voice.is_playing():
-                async with ctx.typing():
-                    try:
-                        self._cur_song[guild_id] = self._queue[guild_id].pop(0)
-                    except IndexError:
-                        self._cur_song[guild_id] = None
-                    if self._cur_song[guild_id] is None:
-                        await voice.disconnect()
-                        return
-
-                    player = self.get_players(ctx, self._REFRESH_PLAYER) if refresh else self.get_players(ctx)
-                    voice.play(
-                        player,
-                        after=lambda e:
-                        self.retry_play(ctx, voice, e) if e else self.play_next(ctx)
+                self.retry_play(ctx, voice, e) if e else self.play_next(ctx)
                     )
-                await ctx.send('**Now playing:** {}'.format(self._cur_song[guild_id].title), delete_after=20)
-            else:
-                await asyncio.sleep(1)
+            await ctx.send('**Now playing:** {}'.format(self._cur_song[guild_id].title), delete_after=20)
+        else:
+            await asyncio.sleep(1)
     
     def retry_play(self, ctx, voice, e):
         g_id = ctx.guild.id
@@ -380,12 +382,20 @@ class Player(commands.Cog):
         vc = discord.utils.get(self._bot.voice_clients, guild=ctx.guild)
 
         if self._loop[guild_id]:
+            if self._loop_count[guild_id] is not None:
+                if self._loop_counter[guild_id] < list(self._loop_count[guild_id].values())[0]:
+                    self._loop_counter[guild_id] += 1
+                else:
+                    self._loop[guild_id] = self._NO_LOOP
+                    self.play_next(ctx)
+            
             player = self.get_players(ctx, self._REFRESH_PLAYER)
             ctx.voice_client.play(
                 player,
                 after=lambda e:
                 print('Player error: %s' % e) if e else self.play_next(ctx)
             )
+            
         else:
             if len(self._queue[guild_id]) >= 1:
                 try:
@@ -452,6 +462,28 @@ class Player(commands.Cog):
         if self._is_connected(ctx):
             ctx.voice_client.pause()
             try:
+                self.play_next(ctx)
+            except IOError:
+                ctx.voice_client.resume()
+                return await ctx.send("The next media file is not ready to be played just yet - please be patient.")
+        else:
+            await ctx.send("I am not in any voice chat right now")
+
+    @commands.command(name= 'fskip', aliases = ['forceskip', 'force_skip'])
+    async def force_skip(self, ctx):
+        """
+        Skips to next song in queue, but forces the skip -- the loop will be ignored.
+        """
+        can_join_vc = self.peek_vc(ctx)
+        if not can_join_vc:
+            return await ctx.send("You need to be in a voice channel to use this command.")
+
+        guild_id = ctx.guild.id
+
+        if self._is_connected(ctx):
+            ctx.voice_client.pause()
+            try:
+                self._loop[guild_id] = self._NO_LOOP # next song is set to NOT loop - which should be what people want anyway.
                 self.play_next(ctx)
             except IOError:
                 ctx.voice_client.resume()
@@ -549,18 +581,32 @@ class Player(commands.Cog):
         await ctx.send("Queue cleared!")
 
     @commands.command(name='loop')
-    async def loop(self, ctx):
+    async def loop(self, ctx, loop_amount = None):
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
         guild_id = ctx.guild.id
 
         if self._loop[guild_id]:
+            if loop_amount is not None:
+                return await ctx.send(f"Already looping a couple of times - please type {BOT_PREFIX}loop to end loop.")
             self._loop[guild_id] = self._NO_LOOP
+            if self._loop_count[guild_id] is not None:
+                self._loop_count[guild_id] = None
             await ctx.send("No longer looping current song.")
         else:
+            if loop_amount is not None:
+                if not loop_amount.isdigit():
+                    return await ctx.send("Please enter a number if you want to loop the current song a number of times.")
+                else:
+                    self._loop_count[guild_id] = {
+                        self._cur_song[guild_id] : int(loop_amount)
+                        }
+                    await ctx.send(f"Looping current song for {loop_amount} times.")
+            else:
+                await ctx.send("Looping current song.")
             self._loop[guild_id] = self._LOOP
-            await ctx.send("Looping current song.")
+            
 
     @commands.command(name='shuffle')
     async def shuffle(self, ctx):

@@ -42,6 +42,12 @@ class Core(commands.Cog):
         )
 
         embed.add_field(
+            name = ">3fskip/forceskip/force_skip",
+            value = "Skips the current song regardless of loop status. Next song will not be looped using this command.",
+            inline = False
+        )
+
+        embed.add_field(
             name = ">3loop",
             value = "Loops the curent media.",
             inline = False

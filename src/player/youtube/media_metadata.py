@@ -174,3 +174,15 @@ class MediaMetadata:
             'duration': self.duration,
             'url': self.original_url
         }
+
+    def __key(self):
+        return (self.id, self.title)       
+
+    def __hash__(self):
+        return hash(self.__key())
+
+    def __eq__(self, other):
+        if isinstance(other, MediaMetadata):
+            if self.id == other.id and self.title == other.title:
+                return True
+        return False
