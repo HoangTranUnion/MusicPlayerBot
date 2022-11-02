@@ -387,6 +387,8 @@ class Player(commands.Cog):
                     self._loop_counter[guild_id] += 1
                 else:
                     self._loop[guild_id] = self._NO_LOOP
+                    self._loop_count[guild_id] = None
+                    self._loop_counter[guild_id] = 0
                     self.play_next(ctx)
             
             player = self.get_players(ctx, self._REFRESH_PLAYER)
