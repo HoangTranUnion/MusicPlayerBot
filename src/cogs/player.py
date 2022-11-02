@@ -29,7 +29,7 @@ YOUTUBEDL_PARAMS = {
         'preferredcodec': 'mp3',
         'preferredquality': '192',
     }],
-    'outtmpl': os.path.join(MUSIC_STORAGE, '%(id)s.%(ext)s')
+    'outtmpl': os.path.join(MUSIC_STORAGE, '%(id)s.%(ext)s'),
 }
 
 MAX_QUEUE_SIZE = 50  # not implemented - basically max queue size possible supported.
@@ -167,14 +167,25 @@ class Player(commands.Cog):
     _NEW_PLAYER = 1
     _REFRESH_PLAYER = 0
 
-    _FFMPEG_OPTIONS = {
+    _FFMPEG_STREAM_OPTIONS = {
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
         'options': '-vn',
     }
+
+    _FFMPEG_PLAY_OPTIONS = {
+        'options': '-vn',
+    }    
 
     _ACCESS_JOB = "access"
     _SEARCH_JOB = "search"
 
     _MAX_RETRY_COUNT = 3
+
+    _MAX_AUDIO_ALLOWED_TIME = 21600
+    
+    # URL_REFRESH_TIME = 21600 # issue found at https://gist.github.com/vbe0201/ade9b80f2d3b64643d854938d40a0a2d?permalink_comment_id=4140046#gistcomment-4140046
+                               # basically, if the playlist is set to be played for 6 hrs, the latter links will expire.
+                               # though, this should only matter to streaming music, right?
 
     def __init__(self, bot):
         self._bot = bot
@@ -190,9 +201,10 @@ class Player(commands.Cog):
         self._players: Dict[int, discord.FFmpegPCMAudio] = {}
         self._vault = Vault()
         self._cur_processing: Dict[int, bool] = defaultdict(lambda: False)
-        self._pre_play_processing: Dict[int, bool] = defaultdict(lambda: False)
         self._bot_config = Config(CONFIG_FILE_LOC)
         self._retry_count: Dict[int, int] = defaultdict(lambda: 0)
+
+        self._requires_download: Dict[int, List[MediaMetadata]] = defaultdict(list)
 
     @staticmethod
     def _delete_files(song_metadata: MediaMetadata):
@@ -208,8 +220,11 @@ class Player(commands.Cog):
         if guild_id in self._players and job:
             return self._players[guild_id]
         else:
-            player = discord.FFmpegPCMAudio(os.path.join(MUSIC_STORAGE, f"{self._cur_song[guild_id].id}.mp3"),
-                                            **self._FFMPEG_OPTIONS)
+            if self._cur_song[guild_id] not in self._requires_download[guild_id]:
+                player = discord.FFmpegPCMAudio(self._cur_song[guild_id].url, **self._FFMPEG_STREAM_OPTIONS)
+            else:
+                player = discord.FFmpegPCMAudio(os.path.join(MUSIC_STORAGE, f"{self._cur_song[guild_id].id}.mp3"),
+                                            **self._FFMPEG_PLAY_OPTIONS)
             self._players[guild_id] = player
             return player
 
@@ -273,6 +288,18 @@ class Player(commands.Cog):
             else:
                 msg = f"Added {data_l} songs to the queue."
 
+            # checking for entries that requires downloading
+            # These entries are some but not limited to:
+            #  - Entries that are more than 6 hours in play time.
+            #  - Entries that make the playlist plays longer than 6 hours 
+            # All of this is mainly to preserve the items in the playlist.
+
+            queue_total_play_time = sum([i.duration for i in self._queue[guild_id]])
+            for item_ind, item in enumerate(data):
+                if queue_total_play_time + item.duration >= self._MAX_AUDIO_ALLOWED_TIME:
+                    self._requires_download[guild_id].extend[data[item_ind:]]
+                    break
+
             self._queue[guild_id].extend(data)
             await ctx.send(msg)
 
@@ -297,28 +324,28 @@ class Player(commands.Cog):
 
         """
         guild_id = ctx.guild.id
-        if self._pre_play_processing[guild_id]:
-            await asyncio.sleep(1)
-            await self.pre_play_process(ctx, data, voiceChannel)
-        else:
-            try:
-                obj = Downloader(data, YT_DLP_SESH)
-                await run_blocker(self._bot, obj.first_download)
-            except NoVideoInQueueError:
-                return await ctx.send("No items are currently in queue")
+        
+            # try:
+            #     obj = Downloader(data, YT_DLP_SESH)
+            #     await run_blocker(self._bot, obj.first_download)
+            # except NoVideoInQueueError:
+            #     return await ctx.send("No items are currently in queue")
 
-            if len(data) > 1:
+            # if len(data) > 1:
+        try:
+            if self._requires_download[guild_id]:
                 self.bg_download_check.start(ctx)
+        except RuntimeError:
+            pass
 
-            if not self._is_connected(ctx):
-                await voiceChannel.connect()
+        if not self._is_connected(ctx):
+            await voiceChannel.connect()
 
-            voice = ctx.voice_client
-            self._pre_play_processing[guild_id] = False
-            try:
-                await self.play_song(ctx, voice)
-            except discord.errors.ClientException:
-                pass
+        voice = ctx.voice_client
+        try:
+            await self.play_song(ctx, voice)
+        except discord.errors.ClientException:
+            pass
 
     async def bg_process_rq(self, ctx):
         """ Processes the requests in the background
@@ -338,7 +365,7 @@ class Player(commands.Cog):
     async def bg_download_check(self, ctx):
         guild_id = ctx.guild.id
 
-        for item in self._queue[guild_id]:
+        for item in self._requires_download[guild_id]:
             if not isExist(item):
                 down_sesh = SingleDownloader(item, YT_DLP_SESH)
                 await run_blocker(self._bot, down_sesh.download)
@@ -387,8 +414,6 @@ class Player(commands.Cog):
                     self._loop_counter[guild_id] += 1
                 else:
                     self._loop[guild_id] = self._NO_LOOP
-                    self._loop_count[guild_id] = None
-                    self._loop_counter[guild_id] = 0
                     self.play_next(ctx)
             
             player = self.get_players(ctx, self._REFRESH_PLAYER)
@@ -398,36 +423,39 @@ class Player(commands.Cog):
                 print('Player error: %s' % e) if e else self.play_next(ctx)
             )
             
-        else:
-            if len(self._queue[guild_id]) >= 1:
-                try:
-                    self._previous_song[guild_id] = self._cur_song[guild_id]
-                    self._cur_song[guild_id] = self._queue[guild_id].pop(0)
-                    if not isExist(self._cur_song[guild_id]):
-                        self._queue[guild_id].insert(0, self._cur_song[guild_id])
-                        self._cur_song[guild_id] = self._previous_song[guild_id]
-                        self._previous_song[guild_id] = None
-                        raise IOError("File not exist just yet")
-                except IndexError:
-                    self._cur_song[guild_id] = None
-                if self._cur_song[guild_id] is None:
-                    asyncio.run_coroutine_threadsafe(ctx.send("Finished playing"), ctx.bot.loop)
-                    asyncio.run_coroutine_threadsafe(ctx.voice_client.disconnect(), ctx.bot.loop)
-                    return
+        elif len(self._queue[guild_id]) >= 1:
+            try:
+                self._previous_song[guild_id] = self._cur_song[guild_id]
+                self._cur_song[guild_id] = self._queue[guild_id].pop(0)
+                if self._cur_song[guild_id] in self._requires_download[guild_id] and not isExist(self._cur_song[guild_id]):
+                    self._queue[guild_id].insert(0, self._cur_song[guild_id])
+                    self._cur_song[guild_id] = self._previous_song[guild_id]
+                    self._previous_song[guild_id] = None
+                    raise IOError("File not exist just yet")
+            except IndexError:
+                self._cur_song[guild_id] = None
+            if self._cur_song[guild_id] is None:
+                asyncio.run_coroutine_threadsafe(ctx.send("Finished playing"), ctx.bot.loop)
+                asyncio.run_coroutine_threadsafe(ctx.voice_client.disconnect(), ctx.bot.loop)
+                return
 
-                vc.play(self.get_players(ctx, job=self._REFRESH_PLAYER), after=lambda e: self.play_next(ctx))
-                asyncio.run_coroutine_threadsafe(ctx.send(
+            ctx.voice_client.play(self.get_players(ctx, job=self._REFRESH_PLAYER), after=lambda e: self.play_next(ctx))
+            asyncio.run_coroutine_threadsafe(ctx.send(
                     f'**Now playing:** {self._cur_song[guild_id].title}',
                     delete_after=20
                 ), ctx.bot.loop)
-            else:
-                if not vc.is_playing():
-                    asyncio.run_coroutine_threadsafe(vc.disconnect(), self._bot.loop)
-                asyncio.run_coroutine_threadsafe(ctx.send("Finished playing!"), ctx.bot.loop)
+        elif not ctx.voice_client.is_playing():
+            asyncio.run_coroutine_threadsafe(vc.disconnect(), self._bot.loop)
+            asyncio.run_coroutine_threadsafe(ctx.send("Finished playing!"), ctx.bot.loop)
 
     @commands.command()
     @commands.is_owner()
     async def debug(self, ctx):
+        """Debugs a section of the code. Only the owner can use this.
+
+        Args:
+            ctx (commands.Context()): context of the message
+        """
         guild_id = ctx.guild.id
         await ctx.send(self._queue[guild_id])
         if self._cur_song[guild_id] is not None:
@@ -450,7 +478,6 @@ class Player(commands.Cog):
             await ctx.voice_client.disconnect()
         else:
             await ctx.send("I am not in any voice chat right now")
-        self._queue[guild_id].clear()
 
     @commands.command(name="skip")
     async def skip_(self, ctx):
@@ -464,7 +491,7 @@ class Player(commands.Cog):
         if self._is_connected(ctx):
             ctx.voice_client.pause()
             try:
-                self.play_next(ctx)
+                ctx.voice_client.stop()
             except IOError:
                 ctx.voice_client.resume()
                 return await ctx.send("The next media file is not ready to be played just yet - please be patient.")
@@ -604,7 +631,7 @@ class Player(commands.Cog):
                     self._loop_count[guild_id] = {
                         self._cur_song[guild_id] : int(loop_amount)
                         }
-                    await ctx.send(f"Looping current song for {loop_amount} times.")
+                    await ctx.send(f"Looping current song for {loop_amount} more times.")
             else:
                 await ctx.send("Looping current song.")
             self._loop[guild_id] = self._LOOP
@@ -637,12 +664,6 @@ class Player(commands.Cog):
         else:
             await ctx.send("Changed to manually select video from search.")
 
-    @set_state.error
-    async def set_state_error(self, ctx, error):
-        if isinstance(error, commands.CheckFailure):
-            msg = f"You don't have the privilege to set this {ctx.message.author.mention}."
-            await ctx.send(msg)
-
     @staticmethod
     def peek_vc(ctx):
         """
@@ -656,13 +677,11 @@ class Player(commands.Cog):
 
         return True
 
-    @staticmethod
-    async def idle_wait(ctx, ori_time):
-        elapsed = default_timer() - ori_time
-        if elapsed > 5:
-            await ctx.send("This will take a while to load, please be patient")
-        elif elapsed > 60:
-            await ctx.send("This is taking longer than expected, please be patient...")
+    @set_state.error
+    async def set_state_error(self, ctx, error):
+        if isinstance(error, commands.CheckFailure):
+            msg = f"You don't have the privilege to set this {ctx.message.author.mention}."
+            await ctx.send(msg)
 
     def _is_connected(self, ctx):
         return discord.utils.get(self._bot.voice_clients, guild=ctx.guild)
