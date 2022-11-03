@@ -5,6 +5,8 @@ from src.player.observers import DownloaderObservable
 
 
 class LoadURL(DownloaderObservable):
+    """Loads a YouTube URL
+    """
     def __init__(self, url):
         super().__init__()
         self._url = url

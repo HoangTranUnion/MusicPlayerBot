@@ -4,6 +4,8 @@ from src.player.youtube.media_metadata import MediaMetadata
 
 
 class SearchVideos(DownloaderObservable):
+    """Searches for a specified number of videos on YouTube.
+    """
     _SITE_MAPPING = {
         "YouTube":'ytsearch',
         "Bilibili":'bilisearch'

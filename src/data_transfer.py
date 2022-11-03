@@ -3,6 +3,8 @@ from typing import Dict, List
 
 
 class Vault:
+    """A general vault for storing datas that are not immediately processed between classes. 
+    """
     def __init__(self):
         self._data: Dict[int, List] = defaultdict(list)
 
@@ -21,6 +23,8 @@ class Vault:
 
     
 class Sender:
+    """A sender to send the items to the Vault.
+    """
     def __init__(self, id_:int, vault: Vault):
         self._vault = vault
         self._id = id_

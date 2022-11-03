@@ -63,7 +63,7 @@ class MediaMetadata:
 
     def __init__(self, info_dict: dict):
         '''
-        Keeps track of the metadata of a YouTube video
+        Keeps track of the metadata of a YouTube video for ease of access
         All necessary keys:
         'id', 'title', 'formats', 'thumbnails', 'description', 'upload_date', 'uploader', 'uploader_id', 'uploader_url',
          'channel_id', 'channel_url', 'duration', 'view_count', 'average_rating', 'age_limit', 'webpage_url',

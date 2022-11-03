@@ -9,10 +9,14 @@ from src.player.alter_title import alter_title
 
 
 class NoVideoInQueueError(Exception):
+    """Error when there is no video in queue
+    """
     pass
 
 
 class SingleDownloader:
+    """Downloads the audio from a single YouTube video.
+    """
     def __init__(self, data:MediaMetadata, ydl_session:YoutubeDL):
         self._data = data
         self._ydl = ydl_session
@@ -23,6 +27,8 @@ class SingleDownloader:
 
 
 class Downloader:
+    """Downloads the audio from a list of YouTube videos.
+    """
     def __init__(self, data:List[MediaMetadata], ydl_sesh:YoutubeDL):
         self._data = data
         self._ydl = ydl_sesh

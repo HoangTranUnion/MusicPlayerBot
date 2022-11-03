@@ -11,7 +11,7 @@ class Config:
         Loads up the config saved for the bot
 
         Args:
-            config_file (Union[str, Path]): _description_
+            config_file (Union[str, Path]): The location of the config file.
         """
 
         self._config_file = config_file

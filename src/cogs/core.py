@@ -8,6 +8,8 @@ class Core(commands.Cog):
 
     @commands.command(name = "help", aliases = ['h'])
     async def help(self, ctx):
+        """A general help command so users know all available commands.
+        """
         embed = discord.Embed(title = "Help!",
                               description= "Command prefix: >3",
                               color = discord.Color.blue())

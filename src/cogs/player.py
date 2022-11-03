@@ -32,9 +32,6 @@ YOUTUBEDL_PARAMS = {
     'outtmpl': os.path.join(MUSIC_STORAGE, '%(id)s.%(ext)s'),
 }
 
-MAX_QUEUE_SIZE = 50  # not implemented - basically max queue size possible supported.
-
-
 async def run_blocker(client, func, *args, **kwargs):
     func_ = functools.partial(func, *args, **kwargs)
     return await client.loop.run_in_executor(None, func_)
@@ -62,6 +59,11 @@ YT_DLP_SESH = YoutubeDL(YOUTUBEDL_PARAMS)
 
 class RequestQueue(DownloaderObservers):
     def __init__(self, observer = DownloaderObservable()):
+        """Initialize a queue for processing the urls and queries.
+
+        Args:
+            observer (DownloaderObservable, optional): A DownloaderObservable object.
+        """
         super().__init__(observer)
         self.priority: Union[Job, None] = None
         self.on_hold: List[Job] = []
@@ -69,6 +71,11 @@ class RequestQueue(DownloaderObservers):
         self._ongoing_process = False
     
     def add_new_request(self, job: Job):
+        """Adds a new request to the queue
+
+        Args:
+            job (Job): A job for the queue to handle.
+        """
         if self.priority is None and not self.on_hold:
             self.priority = job
         elif self.priority is None:
@@ -78,17 +85,20 @@ class RequestQueue(DownloaderObservers):
             self.on_hold.append(job)
 
     def update(self):
+        """
+        Overrides the original update function in DownloaderObservers
+        """
         if inspect.stack()[1][3] == "notify_observers":
             self._completed_priority = True
 
     async def process_requests(self, client, ctx: commands.Context, vault: Vault, selector_choice):
-        """
-        Projected solution:
-            - If self.priority is not None, proceed to download the file(s) in the playlist given in self.priority
-            - Other than that, pop one from on_hold and let the process continues
-            - If priority is None, and the on_hold list is empty, nothing needs to be done at all. We done!
+        """Processes the requests sequentially.
 
-            - If the download process is completed for one list, continue with the next one.
+        Args:
+            client (_type_): A Discord Bot Client.
+            ctx (commands.Context): Context of the command
+            vault (Vault): A vault to store values for other classes
+            selector_choice (int): Whether the guild wants the search to yield an immediate result or not.
         """
         def check_valid_input(m):
             return m.author == ctx.author and m.channel == ctx.channel
@@ -161,9 +171,6 @@ class Player(commands.Cog):
     _NO_LOOP = 0
     _LOOP = 1
 
-    # _AUTO_PICK_FIRST_VIDEO = 0
-    # _SELECT_VIDEO = 1
-
     _NEW_PLAYER = 1
     _REFRESH_PLAYER = 0
 
@@ -183,11 +190,16 @@ class Player(commands.Cog):
 
     _MAX_AUDIO_ALLOWED_TIME = 21600
     
-    # URL_REFRESH_TIME = 21600 # issue found at https://gist.github.com/vbe0201/ade9b80f2d3b64643d854938d40a0a2d?permalink_comment_id=4140046#gistcomment-4140046
-                               # basically, if the playlist is set to be played for 6 hrs, the latter links will expire.
-                               # though, this should only matter to streaming music, right?
+    # issue found at https://gist.github.com/vbe0201/ade9b80f2d3b64643d854938d40a0a2d?permalink_comment_id=4140046#gistcomment-4140046
+    # basically, if the playlist is set to be played for 6 hrs, the latter links will expire.
+    # though, this should only matter to streaming music, right?
 
     def __init__(self, bot):
+        """Initializes the Player
+
+        Args:
+            bot: A Discord Bot object
+        """
         self._bot = bot
         self._queue: Dict[int, List[MediaMetadata]] = defaultdict(list)
         self._request_queue: Dict[int, RequestQueue] = defaultdict(lambda: RequestQueue())
@@ -208,6 +220,11 @@ class Player(commands.Cog):
 
     @staticmethod
     def _delete_files(song_metadata: MediaMetadata):
+        """ Deletes the files of a song, given the metadata.
+
+        Args:
+            song_metadata (MediaMetadata): The metadata of the song.
+        """
         fp = os.path.join(MUSIC_STORAGE, f"{song_metadata.id}.mp3")
         try:
             if os.path.isfile(fp) or os.path.islink(fp):
@@ -216,6 +233,15 @@ class Player(commands.Cog):
             print('Failed to delete %s. Reason: %s' % (fp, e))
 
     def get_players(self, ctx, job=_NEW_PLAYER):
+        """Gets the player for the bot in a voice channel in a guild
+
+        Args:
+            ctx (commands.Context): Context of the command
+            job (str, optional): The job of this getter, which either gets a new player or refreshes the current one. Defaults to getting a new one.
+
+        Returns:
+            discord.FFmegPCMAudio: The player for the bot to play audio.
+        """
         guild_id = ctx.guild.id
         if guild_id in self._players and job:
             return self._players[guild_id]
@@ -223,8 +249,6 @@ class Player(commands.Cog):
             if self._cur_song[guild_id] not in self._requires_download[guild_id]:
                 player = discord.FFmpegPCMAudio(self._cur_song[guild_id].url, **self._FFMPEG_STREAM_OPTIONS)
             else:
-                while not os.path.isfile(os.path.join(MUSIC_STORAGE, f"{self._cur_song[guild_id].id}.mp3")):
-                    asyncio.run_coroutine_threadsafe(asyncio.sleep(1), ctx.bot.loop)
                 player = discord.FFmpegPCMAudio(os.path.join(MUSIC_STORAGE, f"{self._cur_song[guild_id].id}.mp3"),
                                             **self._FFMPEG_PLAY_OPTIONS)
             self._players[guild_id] = player
@@ -255,16 +279,16 @@ class Player(commands.Cog):
         """
         Allows the bot to play audio in the voice channel.
         Subsequent calls from users in the same channel will add more media entries to the queue.
-        At the moment, the bot only supports YouTube links.
-        :param ctx:
-        :param url_:
+        At the moment, the bot only supports YouTube links and queries.
+        :param ctx: Context of the command
+        :param url_: The url, or the query, that is associated with the command
         :return:
         """
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
 
-        if not url_.strip():
+        if not url_:
             return await ctx.send("No input has been given")
         guild_id = ctx.guild.id
 
@@ -316,9 +340,9 @@ class Player(commands.Cog):
                 except AttributeError:
                     return await ctx.send('You need to be in a voice channel to use this command')
 
-                await self.pre_play_process(ctx, data,voiceChannel)
+                await self.pre_play_process(ctx, voiceChannel)
 
-    async def pre_play_process(self, ctx, data, voiceChannel):
+    async def pre_play_process(self, ctx, voiceChannel):
         """
         Processes the data before playing the songs in the voice channel.
 
@@ -339,7 +363,13 @@ class Player(commands.Cog):
             # if len(data) > 1:
         try:
             if self._requires_download[guild_id]:
-                self.bg_download_check.start(ctx)
+                try:
+                    obj = Downloader(self._requires_download[guild_id][0], YT_DLP_SESH)
+                    await run_blocker(self._bot, obj.first_download)
+                except NoVideoInQueueError:
+                    return await ctx.send("No items are currently in queue")
+                if len(self._requires_download[guild_id]) > 1:
+                    self.bg_download_check.start(ctx)
         except RuntimeError:
             pass
 
@@ -368,6 +398,13 @@ class Player(commands.Cog):
 
     @tasks.loop(seconds = 20)
     async def bg_download_check(self, ctx):
+        """
+
+        Processes the download in the background.
+
+        Args:
+            ctx (_type_): _description_
+        """
         guild_id = ctx.guild.id
 
         for item in self._requires_download[guild_id]:
@@ -376,6 +413,13 @@ class Player(commands.Cog):
                 await run_blocker(self._bot, down_sesh.download)
 
     async def play_song(self, ctx, voice, refresh = False):
+        """Plays the audio.
+
+        Args:
+            ctx (commands.Context): Context of the command,
+            voice (discord.VoiceClient): The current voice client that the command issuer is being in.
+            refresh (bool, optional): Whether the player should be refreshed a lot. Defaults to False.
+        """
         guild_id = ctx.guild.id
 
         if not voice.is_playing():
@@ -399,6 +443,8 @@ class Player(commands.Cog):
             await asyncio.sleep(1)
     
     def retry_play(self, ctx, voice, e):
+        """Retries playing the audio.
+        """
         g_id = ctx.guild.id
         if self._retry_count[g_id] < self._MAX_RETRY_COUNT:
             self._retry_count[g_id] += 1
@@ -409,6 +455,8 @@ class Player(commands.Cog):
             print("Player error: %s", e)
 
     def play_next(self, ctx):
+        """Plays the next audio in queue.
+        """
         guild_id = ctx.guild.id
 
         vc = discord.utils.get(self._bot.voice_clients, guild=ctx.guild)
@@ -527,6 +575,8 @@ class Player(commands.Cog):
 
     @commands.command(name="pause")
     async def pause(self, ctx):
+        """Pauses the player
+        """
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
@@ -539,6 +589,8 @@ class Player(commands.Cog):
 
     @commands.command(name='resume')
     async def resume(self, ctx):
+        """Resumes the player
+        """
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
@@ -551,6 +603,8 @@ class Player(commands.Cog):
 
     @commands.command(name="queue", aliases=["q", "playlist"])
     async def queue_(self, ctx):
+        """Checks the current playlist
+        """
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
@@ -606,16 +660,22 @@ class Player(commands.Cog):
 
     @commands.command(name='clear')
     async def clear_(self, ctx):
+        """Clears the queue
+        """
         guild_id = ctx.guild.id
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
 
         self._queue[guild_id].clear()
+        self._requires_download[guild_id].clear()
         await ctx.send("Queue cleared!")
 
     @commands.command(name='loop')
     async def loop(self, ctx, loop_amount = None):
+        """Loops indefinitely the audio or loop it a finite amount of times.
+        Use the command again to end looping.
+        """
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
@@ -644,6 +704,8 @@ class Player(commands.Cog):
 
     @commands.command(name='shuffle')
     async def shuffle(self, ctx):
+        """Shuffles the playlist
+        """
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
@@ -651,7 +713,7 @@ class Player(commands.Cog):
         guild_id = ctx.guild.id
         if self._queue[guild_id]:
             random.shuffle(self._queue[guild_id])
-            await ctx.send("Queue is shuffled. To check current queue, please use >3queue, or >3q")
+            await ctx.send(f"Queue is shuffled. To check current queue, please use {BOT_PREFIX}queue, or {BOT_PREFIX}q")
         else:
             await ctx.send("There is nothing to be shuffled.")
 
