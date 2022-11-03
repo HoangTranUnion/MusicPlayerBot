@@ -223,6 +223,8 @@ class Player(commands.Cog):
             if self._cur_song[guild_id] not in self._requires_download[guild_id]:
                 player = discord.FFmpegPCMAudio(self._cur_song[guild_id].url, **self._FFMPEG_STREAM_OPTIONS)
             else:
+                while not os.path.isfile(os.path.join(MUSIC_STORAGE, f"{self._cur_song[guild_id].id}.mp3")):
+                    asyncio.run_coroutine_threadsafe(asyncio.sleep(1), ctx.bot.loop)
                 player = discord.FFmpegPCMAudio(os.path.join(MUSIC_STORAGE, f"{self._cur_song[guild_id].id}.mp3"),
                                             **self._FFMPEG_PLAY_OPTIONS)
             self._players[guild_id] = player
@@ -280,7 +282,6 @@ class Player(commands.Cog):
 
         # both runs at the same time from here.
         data = self._vault.get_data(guild_id)
-
         if data is not None:
             data_l = len(data)
             if data_l == 1:
@@ -294,24 +295,28 @@ class Player(commands.Cog):
             #  - Entries that make the playlist plays longer than 6 hours 
             # All of this is mainly to preserve the items in the playlist.
 
-            queue_total_play_time = sum([i.duration for i in self._queue[guild_id]])
+            queue_total_play_time = sum([int(i.duration) for i in self._queue[guild_id]]) if self._queue[guild_id] else 0
             for item_ind, item in enumerate(data):
-                if queue_total_play_time + item.duration >= self._MAX_AUDIO_ALLOWED_TIME:
-                    self._requires_download[guild_id].extend[data[item_ind:]]
+                if item.duration >= self._MAX_AUDIO_ALLOWED_TIME: # for now, for safety, that is removed
+                    await ctx.send(f"Video {item.title} is too long! Current max length allowed is 6 hours! Removed from queue")
+                    data.remove(item)
+                elif queue_total_play_time + item.duration >= self._MAX_AUDIO_ALLOWED_TIME:
+                    self._requires_download[guild_id].extend(data[item_ind:])
                     break
+            
+            if data:
+                self._queue[guild_id].extend(data)
+                await ctx.send(msg)
 
-            self._queue[guild_id].extend(data)
-            await ctx.send(msg)
+                try:
+                    voiceChannel = discord.utils.get(
+                        ctx.message.guild.voice_channels,
+                        name=ctx.author.guild.get_member(ctx.author.id).voice.channel.name
+                    )
+                except AttributeError:
+                    return await ctx.send('You need to be in a voice channel to use this command')
 
-            try:
-                voiceChannel = discord.utils.get(
-                    ctx.message.guild.voice_channels,
-                    name=ctx.author.guild.get_member(ctx.author.id).voice.channel.name
-                )
-            except AttributeError:
-                return await ctx.send('You need to be in a voice channel to use this command')
-
-            await self.pre_play_process(ctx, data,voiceChannel)
+                await self.pre_play_process(ctx, data,voiceChannel)
 
     async def pre_play_process(self, ctx, data, voiceChannel):
         """
