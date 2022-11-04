@@ -1,6 +1,6 @@
 import discord, asyncio
 from pathlib import Path
-from constants import BOT_PREFIX, TOKEN, REMINE_ID, MUSIC_STORAGE
+from constants import BOT_PREFIX, TOKEN, MUSIC_STORAGE
 from discord.ext.commands import Bot, is_owner
 
 intents = discord.Intents.default()
