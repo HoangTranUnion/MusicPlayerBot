@@ -21,46 +21,45 @@ async def on_ready():
 @bot.command()
 @is_owner()
 async def load(ctx, extension):
-    if ctx.author.id == REMINE_ID:
-        try:
-            await bot.load_extension(extension)
-            print(f"Loaded {extension}")
-            await ctx.send(f"Loaded {extension}")
-        except Exception as e:
-            print('{} cannot be loaded.[{}]'.format(extension, e))
-            await ctx.send('{} cannot be loaded.'.format(extension))
-    else:
-        await ctx.send("You are not authorized to use this command")
+    try:
+        await bot.load_extension(extension)
+        print(f"Loaded {extension}")
+        await ctx.send(f"Loaded {extension}")
+    except Exception as e:
+        print('{} cannot be loaded.[{}]'.format(extension, e))
+        await ctx.send('{} cannot be loaded.'.format(extension))
+    
 
 
 @bot.command()
 @is_owner()
 async def unload(ctx, extension):
-    if ctx.author.id == REMINE_ID:
-        try:
-            await bot.unload_extension(extension)
-            print(f"Unloaded {extension}")
-            await ctx.send(f"Unloaded {extension}")
-        except Exception as e:
-            print(f'{extension} cannot be unloaded.[{e}]')
-            await ctx.send(f'{extension} cannot be unloaded.')
-    else:
-        await ctx.send("You are not authorized to use this command")
-
+    try:
+        await bot.unload_extension(extension)
+        print(f"Unloaded {extension}")
+        await ctx.send(f"Unloaded {extension}")
+    except Exception as e:
+        print(f'{extension} cannot be unloaded.[{e}]')
+        await ctx.send(f'{extension} cannot be unloaded.')
+    
 
 @bot.command()
 @is_owner()
 async def reload(ctx, extension):
-    if ctx.author.id == REMINE_ID:
-        try:
-            await bot.reload_extension(extension)
-            print(f"Reloaded {extension}")
-            await ctx.send(f"Reloaded {extension}")
-        except Exception as e:
-            print(f'{extension} cannot be reloaded.[{e}]')
-            await ctx.send(f'{extension} cannot be reloaded.[{e}]')
-    else:
-        await ctx.send("You are not authorized to use this command")
+    try:
+        await bot.reload_extension(extension)
+        print(f"Reloaded {extension}")
+        await ctx.send(f"Reloaded {extension}")
+    except Exception as e:
+        print(f'{extension} cannot be reloaded.[{e}]')
+        await ctx.send(f'{extension} cannot be reloaded.[{e}]')
+    
+
+@load.error
+@unload.error
+@reload.error
+async def error_msg(ctx, extension):
+    await ctx.send("You are not authorized to use this command")
 
 
 if __name__ =='__main__':
