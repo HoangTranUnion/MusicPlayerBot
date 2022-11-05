@@ -17,6 +17,7 @@ from src.player.youtube.media_metadata import MediaMetadata
 from src.player.youtube.load_url import LoadURL
 from src.player.youtube.download_media import Downloader, NoVideoInQueueError, isExist, SingleDownloader
 from src.player.observers import *
+from src.player.load_options import LoopOption, PlayerOption, FFMPEGOption, JobOption
 from src.data_transfer import *
 from src.configs import Config
 
@@ -167,56 +168,23 @@ class RequestQueue(DownloaderObservers):
             await self.process_requests(client, ctx, vault, selector_choice)
     
 
-class Player(commands.Cog):
-    _NO_LOOP = 0
-    _LOOP = 1
-
-    _NEW_PLAYER = 1
-    _REFRESH_PLAYER = 0
-
-    _FFMPEG_STREAM_OPTIONS = {
-        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-        'options': '-vn',
-    }
-
-    _FFMPEG_PLAY_OPTIONS = {
-        'options': '-vn',
-    }    
-
-    _ACCESS_JOB = "access"
-    _SEARCH_JOB = "search"
-
-    _MAX_RETRY_COUNT = 3
-
-    _MAX_AUDIO_ALLOWED_TIME = 21600
-    
-    # issue found at https://gist.github.com/vbe0201/ade9b80f2d3b64643d854938d40a0a2d?permalink_comment_id=4140046#gistcomment-4140046
-    # basically, if the playlist is set to be played for 6 hrs, the latter links will expire.
-    # though, this should only matter to streaming music, right?
-
-    def __init__(self, bot):
-        """Initializes the Player
-
-        Args:
-            bot: A Discord Bot object
-        """
-        self._bot = bot
-        self._queue: Dict[int, List[MediaMetadata]] = defaultdict(list)
-        self._request_queue: Dict[int, RequestQueue] = defaultdict(lambda: RequestQueue())
-        self._loop: Dict[int, int] = defaultdict(lambda: self._NO_LOOP)
+class GuildSession:
+    def __init__(self):
+        self.queue: List[MediaMetadata] = list()
+        self.request_queue: RequestQueue = RequestQueue()
+        self.loop: int = LoopOption.NO_LOOP
         
-        self._loop_count: Dict[int, Union[Dict[MediaMetadata, int], None]] = defaultdict(lambda: None)
-        self._loop_counter: Dict[int, int] = defaultdict(lambda: 0)
+        self.loop_count: Union[Dict[MediaMetadata, int], None] = None
+        self.loop_counter: int = lambda: 0
 
-        self._cur_song: Dict[int, Union[MediaMetadata, None]] = defaultdict(lambda: None)
-        self._previous_song: Dict[int, Union[MediaMetadata, None]] = defaultdict(lambda: None)
-        self._players: Dict[int, discord.FFmpegPCMAudio] = {}
-        self._vault = Vault()
-        self._cur_processing: Dict[int, bool] = defaultdict(lambda: False)
-        self._bot_config = Config(CONFIG_FILE_LOC)
-        self._retry_count: Dict[int, int] = defaultdict(lambda: 0)
+        self.cur_song: Union[MediaMetadata, None] = None
+        self.previous_song: Union[MediaMetadata, None] = None
+        self.player: Union[discord.FFmpegPCMAudio, None] = None
+        
+        self.cur_processing: bool = False
+        self.retry_count: int = 0
 
-        self._requires_download: Dict[int, List[MediaMetadata]] = defaultdict(list)
+        self.requires_download: List[MediaMetadata] = list()
 
     @staticmethod
     def _delete_files(song_metadata: MediaMetadata):
@@ -232,7 +200,38 @@ class Player(commands.Cog):
         except Exception as e:
             print('Failed to delete %s. Reason: %s' % (fp, e))
 
-    def get_players(self, ctx, job=_NEW_PLAYER):
+    def reset(self):
+        bogus_queue = deepcopy(self.queue) # safe delete
+        for item in bogus_queue:
+            self._delete_files(item)
+        self.queue.clear()
+        self.cur_song = None
+        self.player = None
+        self.loop = LoopOption.NO_LOOP
+
+
+class Player(commands.Cog):
+    _MAX_RETRY_COUNT = 3
+
+    _MAX_AUDIO_ALLOWED_TIME = 21600
+    
+    # issue found at https://gist.github.com/vbe0201/ade9b80f2d3b64643d854938d40a0a2d?permalink_comment_id=4140046#gistcomment-4140046
+    # basically, if the playlist is set to be played for 6 hrs, the latter links will expire.
+    # though, this should only matter to streaming music, right?
+
+    def __init__(self, bot):
+        """Initializes the Player
+
+        Args:
+            bot: A Discord Bot object
+        """
+        
+        self._bot = bot
+        self._sessions: Dict[int, GuildSession] = defaultdict(lambda: GuildSession())
+        self._vault = Vault()
+        self._bot_config = Config(CONFIG_FILE_LOC)
+
+    def get_players(self, ctx, job= PlayerOption.NEW_PLAYER):
         """Gets the player for the bot in a voice channel in a guild
 
         Args:
@@ -242,16 +241,17 @@ class Player(commands.Cog):
         Returns:
             discord.FFmegPCMAudio: The player for the bot to play audio.
         """
-        guild_id = ctx.guild.id
-        if guild_id in self._players and job:
-            return self._players[guild_id]
+        guild_sesh = self._get_guild_sesh()
+
+        if guild_sesh.player is not None and job:
+            return guild_sesh.player
         else:
-            if self._cur_song[guild_id] not in self._requires_download[guild_id]:
-                player = discord.FFmpegPCMAudio(self._cur_song[guild_id].url, **self._FFMPEG_STREAM_OPTIONS)
+            if guild_sesh.cur_song not in guild_sesh.requires_download:
+                player = discord.FFmpegPCMAudio(guild_sesh.cur_song.url, **FFMPEGOption.FFMPEG_STREAM_OPTIONS)
             else:
-                player = discord.FFmpegPCMAudio(os.path.join(MUSIC_STORAGE, f"{self._cur_song[guild_id].id}.mp3"),
-                                            **self._FFMPEG_PLAY_OPTIONS)
-            self._players[guild_id] = player
+                player = discord.FFmpegPCMAudio(os.path.join(MUSIC_STORAGE, f"{guild_sesh.cur_song.id}.mp3"),
+                                            **FFMPEGOption.FFMPEG_PLAY_OPTIONS)
+            guild_sesh.player = player
             return player
 
     @commands.Cog.listener()
@@ -261,21 +261,11 @@ class Player(commands.Cog):
         if member.bot and member.id == self._bot.user.id:
             if before.channel and not after.channel:
                 guild_id = member.guild.id
-                bogus_queue = deepcopy(self._queue[guild_id])
-                for item in bogus_queue:
-                    self._delete_files(item)
-                self._queue[guild_id].clear()
-                self._cur_song[guild_id] = None
-                try:
-                    del self._players[guild_id]
-                except KeyError:
-                    pass
-                self._loop[guild_id] = self._NO_LOOP
-
+                self._sessions[guild_id].reset()
                 print(f"cleared in guild id {guild_id}")
-
+            
     @commands.command()
-    async def play(self, ctx, *, url_: str):
+    async def play(self, ctx: commands.Context, *, url_: str):
         """
         Allows the bot to play audio in the voice channel.
         Subsequent calls from users in the same channel will add more media entries to the queue.
@@ -290,22 +280,21 @@ class Player(commands.Cog):
 
         if not url_:
             return await ctx.send("No input has been given")
-        guild_id = ctx.guild.id
-
+        guild_sesh = self._get_guild_sesh()
         if is_valid_link(url_):
-            cmd_job = self._ACCESS_JOB
+            cmd_job = JobOption.ACCESS_JOB
         else:
-            cmd_job = self._SEARCH_JOB
-        self._request_queue[guild_id].add_new_request(Job(cmd_job, url_))
-        if not self._cur_processing[guild_id]:
-            self._cur_processing[guild_id] = True
+            cmd_job = JobOption.SEARCH_JOB
+        guild_sesh.request_queue.add_new_request(Job(cmd_job, url_))
+        if not guild_sesh.cur_processing:
+            guild_sesh.cur_processing = True
             self._bot.loop.create_task(self.bg_process_rq(ctx))
 
-        while self._vault.isEmpty(guild_id):
+        while self._vault.isEmpty(ctx.guild.id):
             await asyncio.sleep(1)
 
         # both runs at the same time from here.
-        data = self._vault.get_data(guild_id)
+        data = self._vault.get_data(ctx.guild.id)
         if data is not None:
             data_l = len(data)
             if data_l == 1:
@@ -319,17 +308,17 @@ class Player(commands.Cog):
             #  - Entries that make the playlist plays longer than 6 hours 
             # All of this is mainly to preserve the items in the playlist.
 
-            queue_total_play_time = sum([int(i.duration) for i in self._queue[guild_id]]) if self._queue[guild_id] else 0
+            queue_total_play_time = sum([int(i.duration) for i in guild_sesh.queue]) if guild_sesh.queue else 0
             for item_ind, item in enumerate(data):
                 if item.duration >= self._MAX_AUDIO_ALLOWED_TIME: # for now, for safety, that is removed
                     await ctx.send(f"Video {item.title} is too long! Current max length allowed is 6 hours! Removed from queue")
                     data.remove(item)
                 elif queue_total_play_time + item.duration >= self._MAX_AUDIO_ALLOWED_TIME:
-                    self._requires_download[guild_id].extend(data[item_ind:])
+                    guild_sesh.requires_download.extend(data[item_ind:])
                     break
             
             if data:
-                self._queue[guild_id].extend(data)
+                guild_sesh.queue.extend(data)
                 await ctx.send(msg)
 
                 try:
@@ -352,8 +341,7 @@ class Player(commands.Cog):
             voiceChannel (_type_): The voice channel to connect to
 
         """
-        guild_id = ctx.guild.id
-        
+        guild_sesh = self._get_guild_sesh()
             # try:
             #     obj = Downloader(data, YT_DLP_SESH)
             #     await run_blocker(self._bot, obj.first_download)
@@ -362,13 +350,13 @@ class Player(commands.Cog):
 
             # if len(data) > 1:
         try:
-            if self._requires_download[guild_id]:
+            if guild_sesh.requires_download:
                 try:
-                    obj = Downloader(self._requires_download[guild_id][0], YT_DLP_SESH)
+                    obj = Downloader(guild_sesh.requires_download[0], YT_DLP_SESH)
                     await run_blocker(self._bot, obj.first_download)
                 except NoVideoInQueueError:
                     return await ctx.send("No items are currently in queue")
-                if len(self._requires_download[guild_id]) > 1:
+                if len(guild_sesh.requires_download) > 1:
                     self.bg_download_check.start(ctx)
         except RuntimeError:
             pass
@@ -388,12 +376,12 @@ class Player(commands.Cog):
         Args:
             ctx (commands.Context): Context of the command
         """
-        guild_id = ctx.guild.id
+        guild_sesh = self._get_guild_sesh()
         while True:
-            if self._request_queue[guild_id].on_hold or self._request_queue[guild_id].priority is not None:
-                await self._request_queue[guild_id].process_requests(self._bot, ctx, self._vault, self._bot_config.isAutoPick(guild_id))
+            if guild_sesh.request_queue.on_hold or guild_sesh.request_queue.priority is not None:
+                await guild_sesh.request_queue.process_requests(self._bot, ctx, self._vault, self._bot_config.isAutoPick(ctx.guild.id))
             else:
-                self._cur_processing[guild_id] = False
+                guild_sesh.cur_processing = False
                 break
 
     @tasks.loop(seconds = 20)
@@ -405,9 +393,8 @@ class Player(commands.Cog):
         Args:
             ctx (_type_): _description_
         """
-        guild_id = ctx.guild.id
-
-        for item in self._requires_download[guild_id]:
+        guild_sesh = self._get_guild_sesh()
+        for item in guild_sesh.requires_download:
             if not isExist(item):
                 down_sesh = SingleDownloader(item, YT_DLP_SESH)
                 await run_blocker(self._bot, down_sesh.download)
@@ -420,36 +407,36 @@ class Player(commands.Cog):
             voice (discord.VoiceClient): The current voice client that the command issuer is being in.
             refresh (bool, optional): Whether the player should be refreshed a lot. Defaults to False.
         """
-        guild_id = ctx.guild.id
+        guild_sesh = self._get_guild_sesh()
 
         if not voice.is_playing():
             async with ctx.typing():
                 try:
-                    self._cur_song[guild_id] = self._queue[guild_id].pop(0)
+                    guild_sesh.cur_song = guild_sesh.queue.pop(0)
                 except IndexError:
-                    self._cur_song[guild_id] = None
-            if self._cur_song[guild_id] is None:
+                    guild_sesh.cur_song = None
+            if guild_sesh.cur_song is None:
                 await voice.disconnect()
                 return
 
-            player = self.get_players(ctx, self._REFRESH_PLAYER) if refresh else self.get_players(ctx)
+            player = self.get_players(ctx, PlayerOption._REFRESH_PLAYER) if refresh else self.get_players(ctx)
             voice.play(
                 player,
                 after=lambda e:
                 self.retry_play(ctx, voice, e) if e else self.play_next(ctx)
                     )
-            await ctx.send('**Now playing:** {}'.format(self._cur_song[guild_id].title), delete_after=20)
+            await ctx.send('**Now playing:** {}'.format(guild_sesh.cur_song.title), delete_after=20)
         else:
             await asyncio.sleep(1)
     
     def retry_play(self, ctx, voice, e):
         """Retries playing the audio.
         """
-        g_id = ctx.guild.id
-        if self._retry_count[g_id] < self._MAX_RETRY_COUNT:
-            self._retry_count[g_id] += 1
-            self._queue[g_id].insert(0, self._cur_song[g_id])
-            self._cur_song[g_id] = None
+        guild_sesh = self._get_guild_sesh()
+        if guild_sesh.retry_count < self._MAX_RETRY_COUNT:
+            guild_sesh.retry_count += 1
+            guild_sesh.queue.insert(0, guild_sesh.cur_song)
+            guild_sesh.cur_song = None
             asyncio.run_coroutine_threadsafe(self.play_song(ctx, voice, True), ctx.bot.loop)
         else:
             print("Player error: %s", e)
@@ -457,16 +444,18 @@ class Player(commands.Cog):
     def play_next(self, ctx):
         """Plays the next audio in queue.
         """
-        guild_id = ctx.guild.id
+        guild_sesh = self._get_guild_sesh()
 
         vc = discord.utils.get(self._bot.voice_clients, guild=ctx.guild)
 
-        if self._loop[guild_id]:
-            if self._loop_count[guild_id] is not None:
-                if self._loop_counter[guild_id] < list(self._loop_count[guild_id].values())[0]:
-                    self._loop_counter[guild_id] += 1
+        if guild_sesh.loop:
+            if guild_sesh.loop_count is not None:
+                if guild_sesh.loop_counter < list(guild_sesh.loop_count.values())[0]:
+                    guild_sesh.loop_counter += 1
                 else:
-                    self._loop[guild_id] = self._NO_LOOP
+                    guild_sesh.loop = LoopOption.NO_LOOP
+                    guild_sesh.loop_count = None
+                    guild_sesh.loop_counter = 0
                     self.play_next(ctx)
             
             player = self.get_players(ctx, self._REFRESH_PLAYER)
@@ -476,25 +465,25 @@ class Player(commands.Cog):
                 print('Player error: %s' % e) if e else self.play_next(ctx)
             )
             
-        elif len(self._queue[guild_id]) >= 1:
+        elif len(guild_sesh.queue) >= 1:
             try:
-                self._previous_song[guild_id] = self._cur_song[guild_id]
-                self._cur_song[guild_id] = self._queue[guild_id].pop(0)
-                if self._cur_song[guild_id] in self._requires_download[guild_id] and not isExist(self._cur_song[guild_id]):
-                    self._queue[guild_id].insert(0, self._cur_song[guild_id])
-                    self._cur_song[guild_id] = self._previous_song[guild_id]
-                    self._previous_song[guild_id] = None
+                guild_sesh.previous_song = guild_sesh.cur_song
+                guild_sesh.cur_song = guild_sesh.queue.pop(0)
+                if guild_sesh.cur_song in guild_sesh.requires_download and not isExist(guild_sesh.cur_song):
+                    guild_sesh.queue.insert(0, guild_sesh.cur_song)
+                    guild_sesh.cur_song = guild_sesh.previous_song
+                    guild_sesh.previous_song = None
                     raise IOError("File not exist just yet")
             except IndexError:
-                self._cur_song[guild_id] = None
-            if self._cur_song[guild_id] is None:
+                guild_sesh.cur_song = None
+            if guild_sesh.cur_song is None:
                 asyncio.run_coroutine_threadsafe(ctx.send("Finished playing"), ctx.bot.loop)
                 asyncio.run_coroutine_threadsafe(ctx.voice_client.disconnect(), ctx.bot.loop)
                 return
 
             ctx.voice_client.play(self.get_players(ctx, job=self._REFRESH_PLAYER), after=lambda e: self.play_next(ctx))
             asyncio.run_coroutine_threadsafe(ctx.send(
-                    f'**Now playing:** {self._cur_song[guild_id].title}',
+                    f'**Now playing:** {guild_sesh.cur_song.title}',
                     delete_after=20
                 ), ctx.bot.loop)
         elif not ctx.voice_client.is_playing():
@@ -509,20 +498,19 @@ class Player(commands.Cog):
         Args:
             ctx (commands.Context()): context of the message
         """
-        guild_id = ctx.guild.id
-        await ctx.send(self._queue[guild_id])
-        if self._cur_song[guild_id] is not None:
-            await ctx.send(self._cur_song[guild_id])
+        guild_sesh = self._get_guild_sesh()
+        await ctx.send(guild_sesh.queue)
+        if guild_sesh.cur_song is not None:
+            await ctx.send(guild_sesh.cur_song)
         else:
             await ctx.send("Currently no song is playing")
 
-        await ctx.send(self._queue)
-        await ctx.send(self._cur_song)
+        await ctx.send([(k, v.queue) for k, v in self._sessions])
+        await ctx.send([(k, v.cur_song) for k, v in self._sessions])
 
     @commands.command(name='stop')
     async def stop_(self, ctx):
         """Stops and disconnects the bot from voice"""
-        guild_id = ctx.guild.id
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
@@ -560,12 +548,12 @@ class Player(commands.Cog):
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
 
-        guild_id = ctx.guild.id
+        guild_sesh = self._get_guild_sesh()
 
         if self._is_connected(ctx):
             ctx.voice_client.pause()
             try:
-                self._loop[guild_id] = self._NO_LOOP # next song is set to NOT loop - which should be what people want anyway.
+                guild_sesh.loop = LoopOption.NO_LOOP # next song is set to NOT loop - which should be what people want anyway.
                 self.play_next(ctx)
             except IOError:
                 ctx.voice_client.resume()
@@ -609,7 +597,7 @@ class Player(commands.Cog):
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
 
-        guild_id = ctx.guild.id
+        guild_sesh = self._get_guild_sesh()
 
         if self._is_connected(ctx):
             cur_playing_embed = discord.Embed(
@@ -618,7 +606,7 @@ class Player(commands.Cog):
 
             cur_playing_embed.add_field(
                 name="Currently playing",
-                value=f"**[{self._cur_song[guild_id].title}]({self._cur_song[guild_id].original_url})** ({_time_split(self._cur_song[guild_id].duration)})\n"
+                value=f"**[{guild_sesh.cur_song.title}]({guild_sesh.cur_song.original_url})** ({_time_split(guild_sesh.cur_song.duration)})\n"
             )
 
             await ctx.send(embed=cur_playing_embed)
@@ -626,7 +614,7 @@ class Player(commands.Cog):
             all_additional_embeds_created = False
             all_embeds = []
             cur_index = 0
-            if self._queue[guild_id]:
+            if guild_sesh.queue:
                 while not all_additional_embeds_created:
                     next_playing_embed = discord.Embed(
                         color=discord.Color.blue()
@@ -634,16 +622,16 @@ class Player(commands.Cog):
 
                     r_link = ""
                     max_reached = False
-                    while not max_reached and cur_index < len(self._queue[guild_id]):
+                    while not max_reached and cur_index < len(guild_sesh.queue):
                         res_ind = cur_index
-                        res = self._queue[guild_id][res_ind]
+                        res = guild_sesh.queue[res_ind]
                         string = f"**{res_ind + 1}. [{res.title}]({res.original_url})** ({_time_split(res.duration)})\n"
                         if len(r_link) <= MAX_MSG_EMBED_SIZE - len(string):
                             r_link += string
                             cur_index += 1
                         else:
                             max_reached = True
-                    if cur_index == len(self._queue[guild_id]):
+                    if cur_index == len(guild_sesh.queue):
                         all_additional_embeds_created = True
                     if r_link != "":
                         next_playing_embed.add_field(
@@ -679,27 +667,27 @@ class Player(commands.Cog):
         can_join_vc = self.peek_vc(ctx)
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
-        guild_id = ctx.guild.id
+        guild_sesh = self._get_guild_sesh()
 
-        if self._loop[guild_id]:
+        if guild_sesh.loop:
             if loop_amount is not None:
                 return await ctx.send(f"Already looping a couple of times - please type {BOT_PREFIX}loop to end loop.")
-            self._loop[guild_id] = self._NO_LOOP
-            if self._loop_count[guild_id] is not None:
-                self._loop_count[guild_id] = None
+            guild_sesh.loop = LoopOption.NO_LOOP
+            if guild_sesh.loop_count is not None:
+                guild_sesh.loop_count = None
             await ctx.send("No longer looping current song.")
         else:
             if loop_amount is not None:
                 if not loop_amount.isdigit():
                     return await ctx.send("Please enter a number if you want to loop the current song a number of times.")
                 else:
-                    self._loop_count[guild_id] = {
-                        self._cur_song[guild_id] : int(loop_amount)
+                    guild_sesh.loop_count = {
+                        guild_sesh.cur_song : int(loop_amount)
                         }
                     await ctx.send(f"Looping current song for {loop_amount} more times.")
             else:
                 await ctx.send("Looping current song.")
-            self._loop[guild_id] = self._LOOP
+            guild_sesh.loop = LoopOption.LOOP
             
 
     @commands.command(name='shuffle')
@@ -710,9 +698,9 @@ class Player(commands.Cog):
         if not can_join_vc:
             return await ctx.send("You need to be in a voice channel to use this command.")
 
-        guild_id = ctx.guild.id
-        if self._queue[guild_id]:
-            random.shuffle(self._queue[guild_id])
+        guild_sesh = self._get_guild_sesh()
+        if guild_sesh.queue:
+            random.shuffle(guild_sesh.queue)
             await ctx.send(f"Queue is shuffled. To check current queue, please use {BOT_PREFIX}queue, or {BOT_PREFIX}q")
         else:
             await ctx.send("There is nothing to be shuffled.")
@@ -753,6 +741,8 @@ class Player(commands.Cog):
     def _is_connected(self, ctx):
         return discord.utils.get(self._bot.voice_clients, guild=ctx.guild)
 
+    def _get_guild_sesh(self, ctx):
+        return self._session[ctx.guild.id]
 
 async def setup(bot):
     await bot.add_cog(Player(bot))
