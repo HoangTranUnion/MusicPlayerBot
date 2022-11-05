@@ -1,5 +1,6 @@
 discord.py == 2.0.1
 yt_dlp == 2021.10.10
+dataclasses
 PyNaCl
 wheel~=0.37.0
 ffmpeg
